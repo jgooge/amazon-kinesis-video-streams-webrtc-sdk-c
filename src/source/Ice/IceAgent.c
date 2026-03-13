@@ -1463,6 +1463,8 @@ STATUS iceAgentSendSrflxCandidateRequest(PIceAgent pIceAgent)
     PStunPacket pBindingRequest = NULL;
     UINT64 checkSum = 0;
     PKvsIpAddress pStunServerAddr = NULL;
+    SOCKET_CONNECTION_STATE socketConnectionState;
+    UINT64 currentTime = GETTIME();
     CHK(pIceAgent != NULL, STATUS_NULL_ARG);
 
     // Assume holding pIceAgent->lock
@@ -1488,8 +1490,21 @@ STATUS iceAgentSendSrflxCandidateRequest(PIceAgent pIceAgent)
                             pCandidate->state = ICE_CANDIDATE_STATE_INVALID;
                             break;
                         }
+                        if (IS_VALID_TIMESTAMP(pCandidate->stateTimeoutTime) && currentTime > pCandidate->stateTimeoutTime) {
+                            DLOGW("STUNS srflx candidate timed out waiting for TCP/TLS setup, marking invalid");
+                            pCandidate->state = ICE_CANDIDATE_STATE_INVALID;
+                            break;
+                        }
+
+                        socketConnectionState = socketConnectionGetState(pCandidate->pSocketConnection);
+                        if (socketConnectionState == SOCKET_CONNECTION_STATE_FAILED) {
+                            DLOGW("STUNS srflx candidate TCP connect failed, marking invalid");
+                            pCandidate->state = ICE_CANDIDATE_STATE_INVALID;
+                            break;
+                        }
+
                         // Wait for TCP connect to complete before starting TLS
-                        if (!socketConnectionIsConnected(pCandidate->pSocketConnection)) {
+                        if (socketConnectionState != SOCKET_CONNECTION_STATE_CONNECTED) {
                             DLOGV("STUNS srflx candidate waiting for TCP connect...");
                             break;
                         }
@@ -1501,7 +1516,14 @@ STATUS iceAgentSendSrflxCandidateRequest(PIceAgent pIceAgent)
                                 DLOGW("Failed to init TLS for STUNS srflx candidate, marking invalid. Status: 0x%08x", retStatus);
                                 pCandidate->state = ICE_CANDIDATE_STATE_INVALID;
                                 retStatus = STATUS_SUCCESS;
+                            } else {
+                                pCandidate->stateTimeoutTime = currentTime + KVS_ICE_STUNS_TLS_HANDSHAKE_TIMEOUT;
                             }
+                            break;
+                        }
+                        if (pCandidate->pSocketConnection->pTlsSession->state == TLS_SESSION_STATE_CLOSED) {
+                            DLOGW("STUNS srflx candidate TLS handshake failed, marking invalid");
+                            pCandidate->state = ICE_CANDIDATE_STATE_INVALID;
                             break;
                         }
                         // Wait for TLS handshake to complete
@@ -1907,6 +1929,7 @@ STATUS iceAgentInitSrflxCandidate(PIceAgent pIceAgent)
             CHK(pCandidate->pSocketConnection->hostname != NULL, STATUS_NOT_ENOUGH_MEMORY);
             STRNCPY(pCandidate->pSocketConnection->hostname, pIceServer->url, hostnameLen);
             // TLS handshake is deferred to the gathering loop after TCP connect completes
+            pCandidate->stateTimeoutTime = GETTIME() + KVS_ICE_STUNS_TCP_CONNECT_TIMEOUT;
         }
     }
 

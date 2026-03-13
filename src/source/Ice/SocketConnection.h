@@ -21,6 +21,12 @@ extern "C" {
 
 typedef STATUS (*ConnectionDataAvailableFunc)(UINT64, struct __SocketConnection*, PBYTE, UINT32, PKvsIpAddress, PKvsIpAddress);
 
+typedef enum {
+    SOCKET_CONNECTION_STATE_IN_PROGRESS,
+    SOCKET_CONNECTION_STATE_CONNECTED,
+    SOCKET_CONNECTION_STATE_FAILED,
+} SOCKET_CONNECTION_STATE;
+
 typedef struct __SocketConnection SocketConnection;
 struct __SocketConnection {
     /* Indicate whether this socket is marked for cleanup */
@@ -143,6 +149,7 @@ BOOL socketConnectionIsClosed(PSocketConnection);
  * @return - STATUS - status of execution
  */
 BOOL socketConnectionIsConnected(PSocketConnection);
+SOCKET_CONNECTION_STATE socketConnectionGetState(PSocketConnection);
 
 // internal functions
 STATUS socketSendDataWithRetry(PSocketConnection, PBYTE, UINT32, PKvsIpAddress, PUINT32);
