@@ -10,7 +10,11 @@ ExternalProject_Add(project_libusrsctp
     GIT_PROGRESS      TRUE
     PREFIX            ${CMAKE_CURRENT_BINARY_DIR}/build
     CMAKE_ARGS        -DCMAKE_INSTALL_PREFIX=${OPEN_SRC_INSTALL_PREFIX}
+                      -DCMAKE_POLICY_VERSION_MINIMUM=3.5
                       -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
+                      -DCMAKE_OSX_ARCHITECTURES=${CMAKE_OSX_ARCHITECTURES}
+                      -DCMAKE_OSX_SYSROOT=${CMAKE_OSX_SYSROOT}
+                      -DCMAKE_OSX_DEPLOYMENT_TARGET=${CMAKE_OSX_DEPLOYMENT_TARGET}
                       "-DCMAKE_C_FLAGS=${CMAKE_C_FLAGS} -fPIC"
                       -Dsctp_werror=0
     BUILD_ALWAYS      TRUE

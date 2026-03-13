@@ -44,6 +44,15 @@ function(build_dependency lib_name)
   # anything after lib_name(${ARGN}) are assumed to be arguments passed over to
   # library building cmake.
   set(build_args ${ARGN})
+  if(DEFINED CMAKE_OSX_ARCHITECTURES AND NOT CMAKE_OSX_ARCHITECTURES STREQUAL "")
+    list(APPEND build_args -DCMAKE_OSX_ARCHITECTURES=${CMAKE_OSX_ARCHITECTURES})
+  endif()
+  if(DEFINED CMAKE_OSX_SYSROOT AND NOT CMAKE_OSX_SYSROOT STREQUAL "")
+    list(APPEND build_args -DCMAKE_OSX_SYSROOT=${CMAKE_OSX_SYSROOT})
+  endif()
+  if(DEFINED CMAKE_OSX_DEPLOYMENT_TARGET AND NOT CMAKE_OSX_DEPLOYMENT_TARGET STREQUAL "")
+    list(APPEND build_args -DCMAKE_OSX_DEPLOYMENT_TARGET=${CMAKE_OSX_DEPLOYMENT_TARGET})
+  endif()
 
   file(REMOVE_RECURSE ${OPEN_SRC_INSTALL_PREFIX}/lib${lib_name})
 
