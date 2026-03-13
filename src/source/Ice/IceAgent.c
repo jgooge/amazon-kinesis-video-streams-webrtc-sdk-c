@@ -23,7 +23,7 @@ extern UINT32 ICE_AGENT_STATE_MACHINE_STATE_COUNT;
 
 #define ICE_FORCE_SRFLX_ONLY_ENV_VAR "KVS_WEBRTC_FORCE_SRFLX_ONLY"
 
-STATIC BOOL iceAgentForceSrflxOnlyMode()
+static BOOL iceAgentForceSrflxOnlyMode()
 {
     PCHAR pValue = GETENV(ICE_FORCE_SRFLX_ONLY_ENV_VAR);
 
@@ -31,10 +31,11 @@ STATIC BOOL iceAgentForceSrflxOnlyMode()
         return FALSE;
     }
 
-    return STRCMP(pValue, "0") != 0 && STRCASECMP(pValue, "false") != 0 && STRCASECMP(pValue, "off") != 0;
+    return STRCMP(pValue, "0") != 0 && STRCMP(pValue, "false") != 0 && STRCMP(pValue, "FALSE") != 0 && STRCMP(pValue, "off") != 0 &&
+           STRCMP(pValue, "OFF") != 0;
 }
 
-STATIC BOOL iceCandidateIsAllowedForSrflxOnlyPoc(PIceCandidate pIceCandidate)
+static BOOL iceCandidateIsAllowedForSrflxOnlyPoc(PIceCandidate pIceCandidate)
 {
     return pIceCandidate != NULL && pIceCandidate->iceCandidateType == ICE_CANDIDATE_TYPE_SERVER_REFLEXIVE;
 }
