@@ -1859,9 +1859,15 @@ STATUS iceAgentInitSrflxCandidate(PIceAgent pIceAgent)
 
         // Open up a new socket at the local interface used by the host candidate. `stuns:` uses an existing TLS-over-TCP
         // socket path, while `stun:` continues to use UDP as before.
-        CHK_STATUS(createSocketConnection(pCandidate->ipAddress.family, pIceServer->transport, &pCandidate->ipAddress,
+        retStatus = createSocketConnection(pCandidate->ipAddress.family, pIceServer->transport, &pCandidate->ipAddress,
                                           pIceServer->transport == KVS_SOCKET_PROTOCOL_TCP ? pStunServerAddress : NULL, (UINT64) pIceAgent,
-                                          incomingDataHandler, pIceAgent->kvsRtcConfiguration.sendBufSize, &pCandidate->pSocketConnection));
+                                          incomingDataHandler, pIceAgent->kvsRtcConfiguration.sendBufSize, &pCandidate->pSocketConnection);
+        if (STATUS_FAILED(retStatus)) {
+            DLOGW("Failed to create socket for srflx candidate on interface, skipping. Status: 0x%08x", retStatus);
+            pCandidate->state = ICE_CANDIDATE_STATE_INVALID;
+            retStatus = STATUS_SUCCESS;
+            continue;
+        }
         ATOMIC_STORE_BOOL(&pCandidate->pSocketConnection->receiveData, TRUE);
         // connectionListener will free the pSocketConnection at the end.
         CHK_STATUS(connectionListenerAddConnection(pIceAgent->pConnectionListener, pCandidate->pSocketConnection));
@@ -1870,7 +1876,13 @@ STATUS iceAgentInitSrflxCandidate(PIceAgent pIceAgent)
             pCandidate->pSocketConnection->hostname = MEMCALLOC(1, hostnameLen + 1);
             CHK(pCandidate->pSocketConnection->hostname != NULL, STATUS_NOT_ENOUGH_MEMORY);
             STRNCPY(pCandidate->pSocketConnection->hostname, pIceServer->url, hostnameLen);
-            CHK_STATUS(socketConnectionInitSecureConnection(pCandidate->pSocketConnection, FALSE));
+            retStatus = socketConnectionInitSecureConnection(pCandidate->pSocketConnection, FALSE);
+            if (STATUS_FAILED(retStatus)) {
+                DLOGW("Failed to init TLS for srflx candidate, skipping. Status: 0x%08x", retStatus);
+                pCandidate->state = ICE_CANDIDATE_STATE_INVALID;
+                retStatus = STATUS_SUCCESS;
+                continue;
+            }
         }
     }
 
