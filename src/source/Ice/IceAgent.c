@@ -1482,22 +1482,45 @@ STATUS iceAgentSendSrflxCandidateRequest(PIceAgent pIceAgent)
                 case ICE_CANDIDATE_TYPE_SERVER_REFLEXIVE:
                     pIceServer = &(pIceAgent->iceServers[pCandidate->iceServerIndex]);
 
-                    if (pIceServer->scheme == ICE_SERVER_SCHEME_STUNS &&
-                        (pCandidate->pSocketConnection == NULL || pCandidate->pSocketConnection->pTlsSession == NULL ||
-                         pCandidate->pSocketConnection->pTlsSession->state != TLS_SESSION_STATE_CONNECTED)) {
-                        if (pCandidate->pSocketConnection != NULL && socketConnectionIsClosed(pCandidate->pSocketConnection)) {
+                    if (pIceServer->scheme == ICE_SERVER_SCHEME_STUNS) {
+                        if (pCandidate->pSocketConnection == NULL || socketConnectionIsClosed(pCandidate->pSocketConnection)) {
+                            DLOGD("STUNS srflx candidate socket closed or null, marking invalid");
                             pCandidate->state = ICE_CANDIDATE_STATE_INVALID;
+                            break;
                         }
-                        break;
+                        // Wait for TCP connect to complete before starting TLS
+                        if (!socketConnectionIsConnected(pCandidate->pSocketConnection)) {
+                            DLOGV("STUNS srflx candidate waiting for TCP connect...");
+                            break;
+                        }
+                        // Start TLS handshake once TCP is connected
+                        if (pCandidate->pSocketConnection->pTlsSession == NULL) {
+                            DLOGD("STUNS srflx candidate TCP connected, initiating TLS handshake to %s", pIceServer->url);
+                            retStatus = socketConnectionInitSecureConnection(pCandidate->pSocketConnection, FALSE);
+                            if (STATUS_FAILED(retStatus)) {
+                                DLOGW("Failed to init TLS for STUNS srflx candidate, marking invalid. Status: 0x%08x", retStatus);
+                                pCandidate->state = ICE_CANDIDATE_STATE_INVALID;
+                                retStatus = STATUS_SUCCESS;
+                            }
+                            break;
+                        }
+                        // Wait for TLS handshake to complete
+                        if (pCandidate->pSocketConnection->pTlsSession->state != TLS_SESSION_STATE_CONNECTED) {
+                            DLOGV("STUNS srflx candidate TLS handshake in progress...");
+                            break;
+                        }
+                        DLOGD("STUNS srflx candidate TLS handshake complete, sending binding request");
                     }
 
                     if (pIceServer->ipAddresses.ipv4Address.family != KVS_IP_FAMILY_TYPE_NOT_SET &&
                         pCandidate->ipAddress.family == KVS_IP_FAMILY_TYPE_IPV4) {
-                        DLOGD("Sending STUN binding request to IPv4 STUN server address.");
+                        DLOGD("Sending STUN binding request to IPv4 %s server (%s).",
+                              pIceServer->scheme == ICE_SERVER_SCHEME_STUNS ? "STUNS" : "STUN", pIceServer->url);
                         pStunServerAddr = &pIceServer->ipAddresses.ipv4Address;
                     } else if (pIceServer->ipAddresses.ipv6Address.family != KVS_IP_FAMILY_TYPE_NOT_SET &&
                                pCandidate->ipAddress.family == KVS_IP_FAMILY_TYPE_IPV6) {
-                        DLOGD("Sending STUN binding request to IPv6 STUN server address.");
+                        DLOGD("Sending STUN binding request to IPv6 %s server (%s).",
+                              pIceServer->scheme == ICE_SERVER_SCHEME_STUNS ? "STUNS" : "STUN", pIceServer->url);
                         pStunServerAddr = &pIceServer->ipAddresses.ipv6Address;
                     }
                     CHK_ERR(pStunServerAddr != NULL, STATUS_INVALID_ARG, "No IP-family-compatible STUN server address found for candidate %s",
@@ -1848,10 +1871,16 @@ STATUS iceAgentInitSrflxCandidate(PIceAgent pIceAgent)
         pCandidate = srflxCandidates[j];
         pIceServer = &pIceAgent->iceServers[pCandidate->iceServerIndex];
         if (IS_IPV4_ADDR(&(pCandidate->ipAddress))) {
-            DLOGI("Initializing an IPv4 STUN candidate...");
+            DLOGI("Initializing an IPv4 %s srflx candidate (server: %s, transport: %s)...",
+                  pIceServer->scheme == ICE_SERVER_SCHEME_STUNS ? "STUNS" : "STUN",
+                  pIceServer->url,
+                  pIceServer->transport == KVS_SOCKET_PROTOCOL_TCP ? "TCP/TLS" : "UDP");
             pStunServerAddress = &pIceServer->ipAddresses.ipv4Address;
         } else {
-            DLOGI("Initializing an IPv6 STUN candidate...");
+            DLOGI("Initializing an IPv6 %s srflx candidate (server: %s, transport: %s)...",
+                  pIceServer->scheme == ICE_SERVER_SCHEME_STUNS ? "STUNS" : "STUN",
+                  pIceServer->url,
+                  pIceServer->transport == KVS_SOCKET_PROTOCOL_TCP ? "TCP/TLS" : "UDP");
             pStunServerAddress = &pIceServer->ipAddresses.ipv6Address;
         }
 
@@ -1863,7 +1892,8 @@ STATUS iceAgentInitSrflxCandidate(PIceAgent pIceAgent)
                                           pIceServer->transport == KVS_SOCKET_PROTOCOL_TCP ? pStunServerAddress : NULL, (UINT64) pIceAgent,
                                           incomingDataHandler, pIceAgent->kvsRtcConfiguration.sendBufSize, &pCandidate->pSocketConnection);
         if (STATUS_FAILED(retStatus)) {
-            DLOGW("Failed to create socket for srflx candidate on interface, skipping. Status: 0x%08x", retStatus);
+            DLOGW("Failed to create socket for %s srflx candidate on interface, skipping. Status: 0x%08x",
+                  pIceServer->scheme == ICE_SERVER_SCHEME_STUNS ? "STUNS" : "STUN", retStatus);
             pCandidate->state = ICE_CANDIDATE_STATE_INVALID;
             retStatus = STATUS_SUCCESS;
             continue;
@@ -1876,13 +1906,7 @@ STATUS iceAgentInitSrflxCandidate(PIceAgent pIceAgent)
             pCandidate->pSocketConnection->hostname = MEMCALLOC(1, hostnameLen + 1);
             CHK(pCandidate->pSocketConnection->hostname != NULL, STATUS_NOT_ENOUGH_MEMORY);
             STRNCPY(pCandidate->pSocketConnection->hostname, pIceServer->url, hostnameLen);
-            retStatus = socketConnectionInitSecureConnection(pCandidate->pSocketConnection, FALSE);
-            if (STATUS_FAILED(retStatus)) {
-                DLOGW("Failed to init TLS for srflx candidate, skipping. Status: 0x%08x", retStatus);
-                pCandidate->state = ICE_CANDIDATE_STATE_INVALID;
-                retStatus = STATUS_SUCCESS;
-                continue;
-            }
+            // TLS handshake is deferred to the gathering loop after TCP connect completes
         }
     }
 
@@ -2740,6 +2764,14 @@ STATUS handleStunPacket(PIceAgent pIceAgent, PBYTE pBuffer, UINT32 bufferLen, PS
 
                 // Update the server reflexive address which later will be picked up by the timer callback
                 CHK_STATUS(updateCandidateAddress(pIceCandidate, &pStunAttributeAddress->address));
+                {
+                    CHAR srflxAddr[KVS_IP_ADDRESS_STRING_BUFFER_LEN];
+                    getIpAddrStr(&pStunAttributeAddress->address, srflxAddr, ARRAY_SIZE(srflxAddr));
+                    DLOGI("Srflx candidate %s got reflexive address %s:%u via %s (server: %s)",
+                          pIceCandidate->id, srflxAddr, (UINT16) getInt16(pStunAttributeAddress->address.port),
+                          pIceAgent->iceServers[pIceCandidate->iceServerIndex].scheme == ICE_SERVER_SCHEME_STUNS ? "stuns" : "stun",
+                          pIceAgent->iceServers[pIceCandidate->iceServerIndex].url);
+                }
 
                 // Remove from the transaction id store as we no longer are awaiting for the bind response
                 transactionIdStoreRemove(pIceAgent->pStunBindingRequestTransactionIdStore, pBuffer + STUN_PACKET_TRANSACTION_ID_OFFSET);
@@ -2955,6 +2987,7 @@ VOID iceAgentLogNewCandidate(PIceCandidate pIceCandidate)
 {
     CHAR ipAddr[KVS_IP_ADDRESS_STRING_BUFFER_LEN];
     PCHAR protocol = "UNKNOWN";
+    PCHAR scheme = "";
     KVS_SOCKET_PROTOCOL candidateProtocol = KVS_SOCKET_PROTOCOL_NONE;
     if (pIceCandidate != NULL) {
         getIpAddrStr(&pIceCandidate->ipAddress, ipAddr, ARRAY_SIZE(ipAddr));
@@ -2973,9 +3006,27 @@ VOID iceAgentLogNewCandidate(PIceCandidate pIceCandidate)
             default:
                 break;
         }
-        DLOGD("New %s ice candidate discovered. Id: %s. Ip: %s:%u. Type: %s. Protocol: %s.", pIceCandidate->isRemote ? "remote" : "local",
+        if (!pIceCandidate->isRemote && pIceCandidate->pIceAgent != NULL &&
+            (pIceCandidate->iceCandidateType == ICE_CANDIDATE_TYPE_SERVER_REFLEXIVE ||
+             pIceCandidate->iceCandidateType == ICE_CANDIDATE_TYPE_RELAYED)) {
+            switch (pIceCandidate->pIceAgent->iceServers[pIceCandidate->iceServerIndex].scheme) {
+                case ICE_SERVER_SCHEME_STUN:
+                    scheme = " (stun)";
+                    break;
+                case ICE_SERVER_SCHEME_STUNS:
+                    scheme = " (stuns)";
+                    break;
+                case ICE_SERVER_SCHEME_TURN:
+                    scheme = " (turn)";
+                    break;
+                case ICE_SERVER_SCHEME_TURNS:
+                    scheme = " (turns)";
+                    break;
+            }
+        }
+        DLOGD("New %s ice candidate discovered. Id: %s. Ip: %s:%u. Type: %s. Protocol: %s.%s", pIceCandidate->isRemote ? "remote" : "local",
               pIceCandidate->id, ipAddr, (UINT16) getInt16(pIceCandidate->ipAddress.port),
-              iceAgentGetCandidateTypeStr(pIceCandidate->iceCandidateType), protocol);
+              iceAgentGetCandidateTypeStr(pIceCandidate->iceCandidateType), protocol, scheme);
     }
 }
 
