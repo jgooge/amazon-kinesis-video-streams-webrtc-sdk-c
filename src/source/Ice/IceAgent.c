@@ -21,6 +21,24 @@ typedef enum {
 extern StateMachineState ICE_AGENT_STATE_MACHINE_STATES[];
 extern UINT32 ICE_AGENT_STATE_MACHINE_STATE_COUNT;
 
+#define ICE_FORCE_SRFLX_ONLY_ENV_VAR "KVS_WEBRTC_FORCE_SRFLX_ONLY"
+
+STATIC BOOL iceAgentForceSrflxOnlyMode()
+{
+    PCHAR pValue = GETENV(ICE_FORCE_SRFLX_ONLY_ENV_VAR);
+
+    if (IS_NULL_OR_EMPTY_STRING(pValue)) {
+        return FALSE;
+    }
+
+    return STRCMP(pValue, "0") != 0 && STRCASECMP(pValue, "false") != 0 && STRCASECMP(pValue, "off") != 0;
+}
+
+STATIC BOOL iceCandidateIsAllowedForSrflxOnlyPoc(PIceCandidate pIceCandidate)
+{
+    return pIceCandidate != NULL && pIceCandidate->iceCandidateType == ICE_CANDIDATE_TYPE_SERVER_REFLEXIVE;
+}
+
 STATUS createIceAgent(PCHAR username, PCHAR password, PIceAgentCallbacks pIceAgentCallbacks, PRtcConfiguration pRtcConfiguration,
                       TIMER_QUEUE_HANDLE timerQueueHandle, PConnectionListener pConnectionListener, PIceAgent* ppIceAgent)
 {
@@ -54,6 +72,11 @@ STATUS createIceAgent(PCHAR username, PCHAR password, PIceAgentCallbacks pIceAge
     pIceAgent->iceTransportPolicy = pRtcConfiguration->iceTransportPolicy;
     pIceAgent->kvsRtcConfiguration = pRtcConfiguration->kvsRtcConfiguration;
     CHK_STATUS(iceAgentValidateKvsRtcConfig(&pIceAgent->kvsRtcConfiguration));
+
+    if (iceAgentForceSrflxOnlyMode()) {
+        DLOGW("%s is enabled. ICE POC mode will only report and pair server-reflexive candidates and will skip relay candidates.",
+              ICE_FORCE_SRFLX_ONLY_ENV_VAR);
+    }
 
     if (pIceAgentCallbacks != NULL) {
         pIceAgent->iceAgentCallbacks = *pIceAgentCallbacks;
@@ -642,12 +665,14 @@ STATUS iceAgentStartGathering(PIceAgent pIceAgent)
 {
     STATUS retStatus = STATUS_SUCCESS;
     UINT64 startTimeInMacro = 0;
+    BOOL forceSrflxOnly = FALSE;
 
     CHK(pIceAgent != NULL, STATUS_NULL_ARG);
     CHK(!ATOMIC_LOAD_BOOL(&pIceAgent->agentStartGathering), retStatus);
 
     ATOMIC_STORE_BOOL(&pIceAgent->agentStartGathering, TRUE);
     pIceAgent->candidateGatheringStartTime = GETTIME();
+    forceSrflxOnly = iceAgentForceSrflxOnlyMode();
     // skip gathering host candidate and srflx candidate if relay only
     if (pIceAgent->iceTransportPolicy != ICE_TRANSPORT_POLICY_RELAY) {
         // Skip getting local host candidates if transport policy is relay only
@@ -661,8 +686,12 @@ STATUS iceAgentStartGathering(PIceAgent pIceAgent)
                                 "Srflx candidates setup time");
     }
 
-    PROFILE_CALL_WITH_T_OBJ(CHK_STATUS(iceAgentInitRelayCandidates(pIceAgent)), pIceAgent->iceAgentProfileDiagnostics.relayCandidateSetUpTime,
-                            "Relay candidates setup time");
+    if (!forceSrflxOnly) {
+        PROFILE_CALL_WITH_T_OBJ(CHK_STATUS(iceAgentInitRelayCandidates(pIceAgent)), pIceAgent->iceAgentProfileDiagnostics.relayCandidateSetUpTime,
+                                "Relay candidates setup time");
+    } else {
+        DLOGW("%s is enabled. Skipping relay candidate gathering for srflx-only POC.", ICE_FORCE_SRFLX_ONLY_ENV_VAR);
+    }
 
     // start listening for incoming data
     CHK_STATUS(connectionListenerStart(pIceAgent->pConnectionListener));
@@ -1106,10 +1135,12 @@ STATUS createIceCandidatePairs(PIceAgent pIceAgent, PIceCandidate pIceCandidate,
     BOOL freeObjOnFailure = TRUE;
     PIceCandidate pCurrentIceCandidate = NULL;
     BOOL doStatCalcs = TRUE;
+    BOOL forceSrflxOnly = FALSE;
 
     CHK(pIceAgent != NULL && pIceCandidate != NULL, STATUS_NULL_ARG);
     CHK_WARN(pIceCandidate->state == ICE_CANDIDATE_STATE_VALID, retStatus,
              "New ice candidate need to be valid to form pairs"); // Ice agent stats calculations are on by default.
+    forceSrflxOnly = iceAgentForceSrflxOnlyMode();
 
 // Ice agent stats calculations are on by default.
 // Runtime control for turning stats calculations on/off can be activated with this compiler flag.
@@ -1130,6 +1161,11 @@ STATUS createIceCandidatePairs(PIceAgent pIceAgent, PIceCandidate pIceCandidate,
         // https://tools.ietf.org/html/rfc8445#section-6.1.2.2
         // pair local and remote candidates with the same family
         if (pCurrentIceCandidate->state == ICE_CANDIDATE_STATE_VALID && pCurrentIceCandidate->ipAddress.family == pIceCandidate->ipAddress.family) {
+            if (forceSrflxOnly &&
+                (!iceCandidateIsAllowedForSrflxOnlyPoc(pIceCandidate) || !iceCandidateIsAllowedForSrflxOnlyPoc(pCurrentIceCandidate))) {
+                continue;
+            }
+
             pIceCandidatePair = (PIceCandidatePair) MEMCALLOC(1, SIZEOF(IceCandidatePair));
             CHK(pIceCandidatePair != NULL, STATUS_NOT_ENOUGH_MEMORY);
 
@@ -1688,6 +1724,7 @@ STATUS iceAgentGatherCandidateTimerCallback(UINT32 timerId, UINT64 currentTime, 
     UINT32 newLocalCandidateCount = 0;
     PIceAgent pIceAgent = (PIceAgent) customData;
     BOOL locked = FALSE, stopScheduling = FALSE;
+    BOOL forceSrflxOnly = FALSE;
     PDoubleListNode pCurNode = NULL;
     UINT64 data;
     PIceCandidate pIceCandidate = NULL;
@@ -1697,6 +1734,7 @@ STATUS iceAgentGatherCandidateTimerCallback(UINT32 timerId, UINT64 currentTime, 
     CHK(pIceAgent != NULL, STATUS_NULL_ARG);
     MEMSET(newLocalCandidates, 0x00, SIZEOF(newLocalCandidates));
     MEMSET(&relayAddress, 0x00, SIZEOF(KvsIpAddress));
+    forceSrflxOnly = iceAgentForceSrflxOnlyMode();
 
     MUTEX_LOCK(pIceAgent->lock);
     locked = TRUE;
@@ -1722,6 +1760,11 @@ STATUS iceAgentGatherCandidateTimerCallback(UINT32 timerId, UINT64 currentTime, 
         // If the candidate has moved to valid state, then we can report it and start creating pairs with
         // srflx candidates.
         else if (pIceCandidate->state == ICE_CANDIDATE_STATE_VALID && !pIceCandidate->reported) {
+            if (forceSrflxOnly && !iceCandidateIsAllowedForSrflxOnlyPoc(pIceCandidate)) {
+                pIceCandidate->reported = TRUE;
+                continue;
+            }
+
             newLocalCandidates[newLocalCandidateCount++] = *pIceCandidate;
             pIceCandidate->reported = TRUE;
 
