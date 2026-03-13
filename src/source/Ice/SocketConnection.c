@@ -12,6 +12,7 @@ STATUS createSocketConnection(KVS_IP_FAMILY_TYPE familyType, KVS_SOCKET_PROTOCOL
     STATUS retStatus = STATUS_SUCCESS;
     PSocketConnection pSocketConnection = NULL;
     CHAR ipAddr[KVS_IP_ADDRESS_STRING_BUFFER_LEN];
+    CHAR peerIpAddr[KVS_IP_ADDRESS_STRING_BUFFER_LEN];
 
     CHK(ppSocketConnection != NULL, STATUS_NULL_ARG);
     CHK(protocol == KVS_SOCKET_PROTOCOL_UDP || pPeerIpAddr != NULL, STATUS_INVALID_ARG);
@@ -54,8 +55,16 @@ CleanUp:
         DLOGD("create socket id %d, without the bind address(%d:%d)", pSocketConnection->localSocket, familyType, protocol);
     }
     if (protocol == KVS_SOCKET_PROTOCOL_TCP) {
-        getIpAddrStr(pPeerIpAddr, ipAddr, ARRAY_SIZE(ipAddr));
-        DLOGD("tcp socket connected with ip: %s:%u. family:%d", ipAddr, (UINT16) getInt16(pPeerIpAddr->port), pPeerIpAddr->family);
+        getIpAddrStr(pPeerIpAddr, peerIpAddr, ARRAY_SIZE(peerIpAddr));
+        if (STATUS_SUCCEEDED(retStatus)) {
+            DLOGD("tcp socket connect initiated: socket=%d local=%s:%u remote=%s:%u remoteFamily=%d", pSocketConnection->localSocket,
+                  pBindAddr != NULL ? ipAddr : "0.0.0.0", pBindAddr != NULL ? (UINT16) getInt16(pBindAddr->port) : 0, peerIpAddr,
+                  (UINT16) getInt16(pPeerIpAddr->port), pPeerIpAddr->family);
+        } else {
+            DLOGW("tcp socket connect setup failed: socket=%d local=%s:%u remote=%s:%u remoteFamily=%d status=0x%08x", pSocketConnection->localSocket,
+                  pBindAddr != NULL ? ipAddr : "0.0.0.0", pBindAddr != NULL ? (UINT16) getInt16(pBindAddr->port) : 0, peerIpAddr,
+                  (UINT16) getInt16(pPeerIpAddr->port), pPeerIpAddr->family, retStatus);
+        }
     }
 
     if (STATUS_FAILED(retStatus) && pSocketConnection != NULL) {

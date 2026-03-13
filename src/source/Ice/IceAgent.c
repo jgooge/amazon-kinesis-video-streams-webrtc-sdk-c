@@ -1834,6 +1834,8 @@ STATUS iceAgentInitSrflxCandidate(PIceAgent pIceAgent)
     PIceCandidate srflxCandidates[KVS_ICE_MAX_LOCAL_CANDIDATE_COUNT];
     PKvsIpAddress pStunServerAddress = NULL;
     SIZE_T hostnameLen = 0;
+    CHAR localIpStr[KVS_IP_ADDRESS_STRING_BUFFER_LEN];
+    CHAR stunIpStr[KVS_IP_ADDRESS_STRING_BUFFER_LEN];
 
     CHK(pIceAgent != NULL, STATUS_NULL_ARG);
 
@@ -1907,6 +1909,8 @@ STATUS iceAgentInitSrflxCandidate(PIceAgent pIceAgent)
         }
 
         CHK(pStunServerAddress != NULL && pStunServerAddress->family != KVS_IP_FAMILY_TYPE_NOT_SET, STATUS_INVALID_ARG);
+        getIpAddrStr(&pCandidate->ipAddress, localIpStr, ARRAY_SIZE(localIpStr));
+        getIpAddrStr(pStunServerAddress, stunIpStr, ARRAY_SIZE(stunIpStr));
 
         // Open up a new socket at the local interface used by the host candidate. `stuns:` uses an existing TLS-over-TCP
         // socket path, while `stun:` continues to use UDP as before.
@@ -1914,8 +1918,10 @@ STATUS iceAgentInitSrflxCandidate(PIceAgent pIceAgent)
                                           pIceServer->transport == KVS_SOCKET_PROTOCOL_TCP ? pStunServerAddress : NULL, (UINT64) pIceAgent,
                                           incomingDataHandler, pIceAgent->kvsRtcConfiguration.sendBufSize, &pCandidate->pSocketConnection);
         if (STATUS_FAILED(retStatus)) {
-            DLOGW("Failed to create socket for %s srflx candidate on interface, skipping. Status: 0x%08x",
-                  pIceServer->scheme == ICE_SERVER_SCHEME_STUNS ? "STUNS" : "STUN", retStatus);
+            DLOGW("Failed to create %s srflx socket, skipping candidate %s. local=%s:%u serverUrl=%s serverIp=%s:%u transport=%s status=0x%08x",
+                  pIceServer->scheme == ICE_SERVER_SCHEME_STUNS ? "STUNS" : "STUN", pCandidate->id, localIpStr,
+                  (UINT16) getInt16(pCandidate->ipAddress.port), pIceServer->url, stunIpStr, (UINT16) getInt16(pStunServerAddress->port),
+                  pIceServer->transport == KVS_SOCKET_PROTOCOL_TCP ? "TCP/TLS" : "UDP", retStatus);
             pCandidate->state = ICE_CANDIDATE_STATE_INVALID;
             retStatus = STATUS_SUCCESS;
             continue;
