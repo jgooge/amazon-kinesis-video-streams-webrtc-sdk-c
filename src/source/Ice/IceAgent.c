@@ -117,15 +117,31 @@ STATUS createIceAgent(PCHAR username, PCHAR password, PIceAgentCallbacks pIceAge
                     CHK(NULL != (pIceAgent->pRtcIceServerDiagnostics[i] = (PRtcIceServerDiagnostics) MEMCALLOC(1, SIZEOF(RtcIceServerDiagnostics))),
                         STATUS_NOT_ENOUGH_MEMORY);
                     pIceAgent->pRtcIceServerDiagnostics[i]->port = (INT32) getInt16(pIceAgent->iceServers[i].ipAddresses.ipv4Address.port);
-                    switch (pIceAgent->iceServers[pIceAgent->iceServersCount].transport) {
-                        case KVS_SOCKET_PROTOCOL_UDP:
+                    switch (pIceAgent->iceServers[pIceAgent->iceServersCount].scheme) {
+                        case ICE_SERVER_SCHEME_STUN:
                             STRCPY(pIceAgent->pRtcIceServerDiagnostics[i]->protocol, ICE_TRANSPORT_TYPE_UDP);
                             break;
-                        case KVS_SOCKET_PROTOCOL_TCP:
-                            STRCPY(pIceAgent->pRtcIceServerDiagnostics[i]->protocol, ICE_TRANSPORT_TYPE_TCP);
+                        case ICE_SERVER_SCHEME_STUNS:
+                            STRCPY(pIceAgent->pRtcIceServerDiagnostics[i]->protocol, ICE_TRANSPORT_TYPE_TLS);
+                            break;
+                        case ICE_SERVER_SCHEME_TURN:
+                        case ICE_SERVER_SCHEME_TURNS:
+                            switch (pIceAgent->iceServers[pIceAgent->iceServersCount].transport) {
+                                case KVS_SOCKET_PROTOCOL_UDP:
+                                    STRCPY(pIceAgent->pRtcIceServerDiagnostics[i]->protocol, ICE_TRANSPORT_TYPE_UDP);
+                                    break;
+                                case KVS_SOCKET_PROTOCOL_TCP:
+                                    STRCPY(pIceAgent->pRtcIceServerDiagnostics[i]->protocol, ICE_TRANSPORT_TYPE_TCP);
+                                    break;
+                                default:
+                                    MEMSET(pIceAgent->pRtcIceServerDiagnostics[i]->protocol, 0,
+                                           SIZEOF(pIceAgent->pRtcIceServerDiagnostics[i]->protocol));
+                                    break;
+                            }
                             break;
                         default:
                             MEMSET(pIceAgent->pRtcIceServerDiagnostics[i]->protocol, 0, SIZEOF(pIceAgent->pRtcIceServerDiagnostics[i]->protocol));
+                            break;
                     }
                     STRCPY(pIceAgent->pRtcIceServerDiagnostics[i]->url, pRtcConfiguration->iceServers[i].urls);
                 }
@@ -1466,6 +1482,15 @@ STATUS iceAgentSendSrflxCandidateRequest(PIceAgent pIceAgent)
                 case ICE_CANDIDATE_TYPE_SERVER_REFLEXIVE:
                     pIceServer = &(pIceAgent->iceServers[pCandidate->iceServerIndex]);
 
+                    if (pIceServer->scheme == ICE_SERVER_SCHEME_STUNS &&
+                        (pCandidate->pSocketConnection == NULL || pCandidate->pSocketConnection->pTlsSession == NULL ||
+                         pCandidate->pSocketConnection->pTlsSession->state != TLS_SESSION_STATE_CONNECTED)) {
+                        if (pCandidate->pSocketConnection != NULL && socketConnectionIsClosed(pCandidate->pSocketConnection)) {
+                            pCandidate->state = ICE_CANDIDATE_STATE_INVALID;
+                        }
+                        break;
+                    }
+
                     if (pIceServer->ipAddresses.ipv4Address.family != KVS_IP_FAMILY_TYPE_NOT_SET &&
                         pCandidate->ipAddress.family == KVS_IP_FAMILY_TYPE_IPV4) {
                         DLOGD("Sending STUN binding request to IPv4 STUN server address.");
@@ -1762,6 +1787,8 @@ STATUS iceAgentInitSrflxCandidate(PIceAgent pIceAgent)
     UINT32 j, srflxCount = 0;
     BOOL locked = FALSE;
     PIceCandidate srflxCandidates[KVS_ICE_MAX_LOCAL_CANDIDATE_COUNT];
+    PKvsIpAddress pStunServerAddress = NULL;
+    SIZE_T hostnameLen = 0;
 
     CHK(pIceAgent != NULL, STATUS_NULL_ARG);
 
@@ -1819,20 +1846,32 @@ STATUS iceAgentInitSrflxCandidate(PIceAgent pIceAgent)
     // Create and start the connection listener outside of the locks
     for (j = 0; j < srflxCount; j++) {
         pCandidate = srflxCandidates[j];
+        pIceServer = &pIceAgent->iceServers[pCandidate->iceServerIndex];
         if (IS_IPV4_ADDR(&(pCandidate->ipAddress))) {
             DLOGI("Initializing an IPv4 STUN candidate...");
+            pStunServerAddress = &pIceServer->ipAddresses.ipv4Address;
         } else {
             DLOGI("Initializing an IPv6 STUN candidate...");
+            pStunServerAddress = &pIceServer->ipAddresses.ipv6Address;
         }
 
-        // Open up a new socket at host candidate's IP address for server reflex candidate.
-        // The new port will be stored in pNewCandidate->ipAddress.port. And the IP address will later be updated
-        // with the correct IP address once the STUN response is received.
-        CHK_STATUS(createSocketConnection(pCandidate->ipAddress.family, KVS_SOCKET_PROTOCOL_UDP, &pCandidate->ipAddress, NULL, (UINT64) pIceAgent,
+        CHK(pStunServerAddress != NULL && pStunServerAddress->family != KVS_IP_FAMILY_TYPE_NOT_SET, STATUS_INVALID_ARG);
+
+        // Open up a new socket at the local interface used by the host candidate. `stuns:` uses an existing TLS-over-TCP
+        // socket path, while `stun:` continues to use UDP as before.
+        CHK_STATUS(createSocketConnection(pCandidate->ipAddress.family, pIceServer->transport, &pCandidate->ipAddress,
+                                          pIceServer->transport == KVS_SOCKET_PROTOCOL_TCP ? pStunServerAddress : NULL, (UINT64) pIceAgent,
                                           incomingDataHandler, pIceAgent->kvsRtcConfiguration.sendBufSize, &pCandidate->pSocketConnection));
         ATOMIC_STORE_BOOL(&pCandidate->pSocketConnection->receiveData, TRUE);
         // connectionListener will free the pSocketConnection at the end.
         CHK_STATUS(connectionListenerAddConnection(pIceAgent->pConnectionListener, pCandidate->pSocketConnection));
+        if (pIceServer->scheme == ICE_SERVER_SCHEME_STUNS) {
+            hostnameLen = STRLEN(pIceServer->url);
+            pCandidate->pSocketConnection->hostname = MEMCALLOC(1, hostnameLen + 1);
+            CHK(pCandidate->pSocketConnection->hostname != NULL, STATUS_NOT_ENOUGH_MEMORY);
+            STRNCPY(pCandidate->pSocketConnection->hostname, pIceServer->url, hostnameLen);
+            CHK_STATUS(socketConnectionInitSecureConnection(pCandidate->pSocketConnection, FALSE));
+        }
     }
 
 CleanUp:

@@ -75,6 +75,7 @@ STATUS freeTlsSession(PTlsSession*);
  * @return STATUS - status of operation
  */
 STATUS tlsSessionStart(PTlsSession, BOOL);
+STATUS tlsSessionStartWithHostname(PTlsSession, BOOL, PCHAR);
 
 /**
  * Decrypt application data up to specified bytes. The decrypted data will be copied back to the original buffer.
@@ -120,8 +121,6 @@ INT32 tlsSessionCertificateVerifyCallback(INT32, X509_STORE_CTX*);
 INT32 tlsSessionSendCallback(PVOID, const unsigned char*, ULONG);
 INT32 tlsSessionReceiveCallback(PVOID, unsigned char*, ULONG);
 
-// Add hostname parameter for mbedTLS 3.x compatibility
-STATUS tlsSessionStartWithHostname(PTlsSession, BOOL, PCHAR);
 #else
 #error "A Crypto implementation is required."
 #endif
