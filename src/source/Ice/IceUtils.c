@@ -241,7 +241,7 @@ STATUS parseIceServer(PIceServer pIceServer, PCHAR url, PCHAR username, PCHAR cr
         urlNoPrefix = url + STRLEN(ICE_URL_PREFIX_STUN_SECURE);
         pIceServer->isSecure = TRUE;
         pIceServer->scheme = ICE_SERVER_SCHEME_STUNS;
-        pIceServer->transport = KVS_SOCKET_PROTOCOL_TCP;
+        pIceServer->transport = KVS_SOCKET_PROTOCOL_UDP;
         port = ICE_STUNS_DEFAULT_PORT;
     } else if (STRNCMPI(ICE_URL_PREFIX_STUN, url, STRLEN(ICE_URL_PREFIX_STUN)) == 0) {
         urlNoPrefix = url + STRLEN(ICE_URL_PREFIX_STUN);

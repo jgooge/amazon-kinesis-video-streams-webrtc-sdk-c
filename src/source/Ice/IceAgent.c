@@ -21,25 +21,6 @@ typedef enum {
 extern StateMachineState ICE_AGENT_STATE_MACHINE_STATES[];
 extern UINT32 ICE_AGENT_STATE_MACHINE_STATE_COUNT;
 
-#define ICE_FORCE_SRFLX_ONLY_ENV_VAR "KVS_WEBRTC_FORCE_SRFLX_ONLY"
-
-static BOOL iceAgentForceSrflxOnlyMode()
-{
-    PCHAR pValue = GETENV(ICE_FORCE_SRFLX_ONLY_ENV_VAR);
-
-    if (IS_NULL_OR_EMPTY_STRING(pValue)) {
-        return FALSE;
-    }
-
-    return STRCMP(pValue, "0") != 0 && STRCMP(pValue, "false") != 0 && STRCMP(pValue, "FALSE") != 0 && STRCMP(pValue, "off") != 0 &&
-           STRCMP(pValue, "OFF") != 0;
-}
-
-static BOOL iceCandidateIsAllowedForSrflxOnlyPoc(PIceCandidate pIceCandidate)
-{
-    return pIceCandidate != NULL && pIceCandidate->iceCandidateType == ICE_CANDIDATE_TYPE_SERVER_REFLEXIVE;
-}
-
 STATUS createIceAgent(PCHAR username, PCHAR password, PIceAgentCallbacks pIceAgentCallbacks, PRtcConfiguration pRtcConfiguration,
                       TIMER_QUEUE_HANDLE timerQueueHandle, PConnectionListener pConnectionListener, PIceAgent* ppIceAgent)
 {
@@ -73,11 +54,6 @@ STATUS createIceAgent(PCHAR username, PCHAR password, PIceAgentCallbacks pIceAge
     pIceAgent->iceTransportPolicy = pRtcConfiguration->iceTransportPolicy;
     pIceAgent->kvsRtcConfiguration = pRtcConfiguration->kvsRtcConfiguration;
     CHK_STATUS(iceAgentValidateKvsRtcConfig(&pIceAgent->kvsRtcConfiguration));
-
-    if (iceAgentForceSrflxOnlyMode()) {
-        DLOGW("%s is enabled. ICE POC mode will only report and pair server-reflexive candidates and will skip relay candidates.",
-              ICE_FORCE_SRFLX_ONLY_ENV_VAR);
-    }
 
     if (pIceAgentCallbacks != NULL) {
         pIceAgent->iceAgentCallbacks = *pIceAgentCallbacks;
@@ -666,14 +642,12 @@ STATUS iceAgentStartGathering(PIceAgent pIceAgent)
 {
     STATUS retStatus = STATUS_SUCCESS;
     UINT64 startTimeInMacro = 0;
-    BOOL forceSrflxOnly = FALSE;
 
     CHK(pIceAgent != NULL, STATUS_NULL_ARG);
     CHK(!ATOMIC_LOAD_BOOL(&pIceAgent->agentStartGathering), retStatus);
 
     ATOMIC_STORE_BOOL(&pIceAgent->agentStartGathering, TRUE);
     pIceAgent->candidateGatheringStartTime = GETTIME();
-    forceSrflxOnly = iceAgentForceSrflxOnlyMode();
     // skip gathering host candidate and srflx candidate if relay only
     if (pIceAgent->iceTransportPolicy != ICE_TRANSPORT_POLICY_RELAY) {
         // Skip getting local host candidates if transport policy is relay only
@@ -687,12 +661,8 @@ STATUS iceAgentStartGathering(PIceAgent pIceAgent)
                                 "Srflx candidates setup time");
     }
 
-    if (!forceSrflxOnly) {
-        PROFILE_CALL_WITH_T_OBJ(CHK_STATUS(iceAgentInitRelayCandidates(pIceAgent)), pIceAgent->iceAgentProfileDiagnostics.relayCandidateSetUpTime,
-                                "Relay candidates setup time");
-    } else {
-        DLOGW("%s is enabled. Skipping relay candidate gathering for srflx-only POC.", ICE_FORCE_SRFLX_ONLY_ENV_VAR);
-    }
+    PROFILE_CALL_WITH_T_OBJ(CHK_STATUS(iceAgentInitRelayCandidates(pIceAgent)), pIceAgent->iceAgentProfileDiagnostics.relayCandidateSetUpTime,
+                            "Relay candidates setup time");
 
     // start listening for incoming data
     CHK_STATUS(connectionListenerStart(pIceAgent->pConnectionListener));
@@ -1136,12 +1106,10 @@ STATUS createIceCandidatePairs(PIceAgent pIceAgent, PIceCandidate pIceCandidate,
     BOOL freeObjOnFailure = TRUE;
     PIceCandidate pCurrentIceCandidate = NULL;
     BOOL doStatCalcs = TRUE;
-    BOOL forceSrflxOnly = FALSE;
 
     CHK(pIceAgent != NULL && pIceCandidate != NULL, STATUS_NULL_ARG);
     CHK_WARN(pIceCandidate->state == ICE_CANDIDATE_STATE_VALID, retStatus,
              "New ice candidate need to be valid to form pairs"); // Ice agent stats calculations are on by default.
-    forceSrflxOnly = iceAgentForceSrflxOnlyMode();
 
 // Ice agent stats calculations are on by default.
 // Runtime control for turning stats calculations on/off can be activated with this compiler flag.
@@ -1162,11 +1130,6 @@ STATUS createIceCandidatePairs(PIceAgent pIceAgent, PIceCandidate pIceCandidate,
         // https://tools.ietf.org/html/rfc8445#section-6.1.2.2
         // pair local and remote candidates with the same family
         if (pCurrentIceCandidate->state == ICE_CANDIDATE_STATE_VALID && pCurrentIceCandidate->ipAddress.family == pIceCandidate->ipAddress.family) {
-            if (forceSrflxOnly &&
-                (!iceCandidateIsAllowedForSrflxOnlyPoc(pIceCandidate) || !iceCandidateIsAllowedForSrflxOnlyPoc(pCurrentIceCandidate))) {
-                continue;
-            }
-
             pIceCandidatePair = (PIceCandidatePair) MEMCALLOC(1, SIZEOF(IceCandidatePair));
             CHK(pIceCandidatePair != NULL, STATUS_NOT_ENOUGH_MEMORY);
 
@@ -1500,8 +1463,6 @@ STATUS iceAgentSendSrflxCandidateRequest(PIceAgent pIceAgent)
     PStunPacket pBindingRequest = NULL;
     UINT64 checkSum = 0;
     PKvsIpAddress pStunServerAddr = NULL;
-    SOCKET_CONNECTION_STATE socketConnectionState;
-    UINT64 currentTime = GETTIME();
     CHK(pIceAgent != NULL, STATUS_NULL_ARG);
 
     // Assume holding pIceAgent->lock
@@ -1520,56 +1481,6 @@ STATUS iceAgentSendSrflxCandidateRequest(PIceAgent pIceAgent)
             switch (pCandidate->iceCandidateType) {
                 case ICE_CANDIDATE_TYPE_SERVER_REFLEXIVE:
                     pIceServer = &(pIceAgent->iceServers[pCandidate->iceServerIndex]);
-
-                    if (pIceServer->scheme == ICE_SERVER_SCHEME_STUNS) {
-                        if (pCandidate->pSocketConnection == NULL || socketConnectionIsClosed(pCandidate->pSocketConnection)) {
-                            DLOGD("STUNS srflx candidate socket closed or null, marking invalid");
-                            pCandidate->state = ICE_CANDIDATE_STATE_INVALID;
-                            break;
-                        }
-                        if (IS_VALID_TIMESTAMP(pCandidate->stateTimeoutTime) && currentTime > pCandidate->stateTimeoutTime) {
-                            DLOGW("STUNS srflx candidate timed out waiting for TCP/TLS setup, marking invalid");
-                            pCandidate->state = ICE_CANDIDATE_STATE_INVALID;
-                            break;
-                        }
-
-                        socketConnectionState = socketConnectionGetState(pCandidate->pSocketConnection);
-                        if (socketConnectionState == SOCKET_CONNECTION_STATE_FAILED) {
-                            DLOGW("STUNS srflx candidate TCP connect failed, marking invalid");
-                            pCandidate->state = ICE_CANDIDATE_STATE_INVALID;
-                            break;
-                        }
-
-                        // Wait for TCP connect to complete before starting TLS
-                        if (socketConnectionState != SOCKET_CONNECTION_STATE_CONNECTED) {
-                            DLOGV("STUNS srflx candidate waiting for TCP connect...");
-                            break;
-                        }
-                        // Start TLS handshake once TCP is connected
-                        if (pCandidate->pSocketConnection->pTlsSession == NULL) {
-                            DLOGD("STUNS srflx candidate TCP connected, initiating TLS handshake to %s", pIceServer->url);
-                            retStatus = socketConnectionInitSecureConnection(pCandidate->pSocketConnection, FALSE);
-                            if (STATUS_FAILED(retStatus)) {
-                                DLOGW("Failed to init TLS for STUNS srflx candidate, marking invalid. Status: 0x%08x", retStatus);
-                                pCandidate->state = ICE_CANDIDATE_STATE_INVALID;
-                                retStatus = STATUS_SUCCESS;
-                            } else {
-                                pCandidate->stateTimeoutTime = currentTime + KVS_ICE_STUNS_TLS_HANDSHAKE_TIMEOUT;
-                            }
-                            break;
-                        }
-                        if (pCandidate->pSocketConnection->pTlsSession->state == TLS_SESSION_STATE_CLOSED) {
-                            DLOGW("STUNS srflx candidate TLS handshake failed, marking invalid");
-                            pCandidate->state = ICE_CANDIDATE_STATE_INVALID;
-                            break;
-                        }
-                        // Wait for TLS handshake to complete
-                        if (pCandidate->pSocketConnection->pTlsSession->state != TLS_SESSION_STATE_CONNECTED) {
-                            DLOGV("STUNS srflx candidate TLS handshake in progress...");
-                            break;
-                        }
-                        DLOGD("STUNS srflx candidate TLS handshake complete, sending binding request");
-                    }
 
                     if (pIceServer->ipAddresses.ipv4Address.family != KVS_IP_FAMILY_TYPE_NOT_SET &&
                         pCandidate->ipAddress.family == KVS_IP_FAMILY_TYPE_IPV4) {
@@ -1725,7 +1636,6 @@ STATUS iceAgentGatherCandidateTimerCallback(UINT32 timerId, UINT64 currentTime, 
     UINT32 newLocalCandidateCount = 0;
     PIceAgent pIceAgent = (PIceAgent) customData;
     BOOL locked = FALSE, stopScheduling = FALSE;
-    BOOL forceSrflxOnly = FALSE;
     PDoubleListNode pCurNode = NULL;
     UINT64 data;
     PIceCandidate pIceCandidate = NULL;
@@ -1735,8 +1645,6 @@ STATUS iceAgentGatherCandidateTimerCallback(UINT32 timerId, UINT64 currentTime, 
     CHK(pIceAgent != NULL, STATUS_NULL_ARG);
     MEMSET(newLocalCandidates, 0x00, SIZEOF(newLocalCandidates));
     MEMSET(&relayAddress, 0x00, SIZEOF(KvsIpAddress));
-    forceSrflxOnly = iceAgentForceSrflxOnlyMode();
-
     MUTEX_LOCK(pIceAgent->lock);
     locked = TRUE;
     CHK_STATUS(doubleListGetHeadNode(pIceAgent->localCandidates, &pCurNode));
@@ -1761,11 +1669,6 @@ STATUS iceAgentGatherCandidateTimerCallback(UINT32 timerId, UINT64 currentTime, 
         // If the candidate has moved to valid state, then we can report it and start creating pairs with
         // srflx candidates.
         else if (pIceCandidate->state == ICE_CANDIDATE_STATE_VALID && !pIceCandidate->reported) {
-            if (forceSrflxOnly && !iceCandidateIsAllowedForSrflxOnlyPoc(pIceCandidate)) {
-                pIceCandidate->reported = TRUE;
-                continue;
-            }
-
             newLocalCandidates[newLocalCandidateCount++] = *pIceCandidate;
             pIceCandidate->reported = TRUE;
 
@@ -1877,9 +1780,6 @@ STATUS iceAgentInitSrflxCandidate(PIceAgent pIceAgent)
     BOOL locked = FALSE;
     PIceCandidate srflxCandidates[KVS_ICE_MAX_LOCAL_CANDIDATE_COUNT];
     PKvsIpAddress pStunServerAddress = NULL;
-    SIZE_T hostnameLen = 0;
-    CHAR localIpStr[KVS_IP_ADDRESS_STRING_BUFFER_LEN];
-    CHAR stunIpStr[KVS_IP_ADDRESS_STRING_BUFFER_LEN];
 
     CHK(pIceAgent != NULL, STATUS_NULL_ARG);
 
@@ -1953,34 +1853,15 @@ STATUS iceAgentInitSrflxCandidate(PIceAgent pIceAgent)
         }
 
         CHK(pStunServerAddress != NULL && pStunServerAddress->family != KVS_IP_FAMILY_TYPE_NOT_SET, STATUS_INVALID_ARG);
-        getIpAddrStr(&pCandidate->ipAddress, localIpStr, ARRAY_SIZE(localIpStr));
-        getIpAddrStr(pStunServerAddress, stunIpStr, ARRAY_SIZE(stunIpStr));
 
-        // Open up a new socket at the local interface used by the host candidate. `stuns:` uses an existing TLS-over-TCP
-        // socket path, while `stun:` continues to use UDP as before.
-        retStatus = createSocketConnection(pCandidate->ipAddress.family, pIceServer->transport, &pCandidate->ipAddress,
-                                          pIceServer->transport == KVS_SOCKET_PROTOCOL_TCP ? pStunServerAddress : NULL, (UINT64) pIceAgent,
-                                          incomingDataHandler, pIceAgent->kvsRtcConfiguration.sendBufSize, &pCandidate->pSocketConnection);
-        if (STATUS_FAILED(retStatus)) {
-            DLOGW("Failed to create %s srflx socket, skipping candidate %s. local=%s:%u serverUrl=%s serverIp=%s:%u transport=%s status=0x%08x",
-                  pIceServer->scheme == ICE_SERVER_SCHEME_STUNS ? "STUNS" : "STUN", pCandidate->id, localIpStr,
-                  (UINT16) getInt16(pCandidate->ipAddress.port), pIceServer->url, stunIpStr, (UINT16) getInt16(pStunServerAddress->port),
-                  pIceServer->transport == KVS_SOCKET_PROTOCOL_TCP ? "TCP/TLS" : "UDP", retStatus);
-            pCandidate->state = ICE_CANDIDATE_STATE_INVALID;
-            retStatus = STATUS_SUCCESS;
-            continue;
-        }
+        // Open up a new socket at host candidate's IP address for server reflex candidate.
+        // The new port will be stored in pNewCandidate->ipAddress.port. And the IP address will later be updated
+        // with the correct IP address once the STUN response is received.
+        CHK_STATUS(createSocketConnection(pCandidate->ipAddress.family, KVS_SOCKET_PROTOCOL_UDP, &pCandidate->ipAddress, NULL, (UINT64) pIceAgent,
+                                          incomingDataHandler, pIceAgent->kvsRtcConfiguration.sendBufSize, &pCandidate->pSocketConnection));
         ATOMIC_STORE_BOOL(&pCandidate->pSocketConnection->receiveData, TRUE);
         // connectionListener will free the pSocketConnection at the end.
         CHK_STATUS(connectionListenerAddConnection(pIceAgent->pConnectionListener, pCandidate->pSocketConnection));
-        if (pIceServer->scheme == ICE_SERVER_SCHEME_STUNS) {
-            hostnameLen = STRLEN(pIceServer->url);
-            pCandidate->pSocketConnection->hostname = MEMCALLOC(1, hostnameLen + 1);
-            CHK(pCandidate->pSocketConnection->hostname != NULL, STATUS_NOT_ENOUGH_MEMORY);
-            STRNCPY(pCandidate->pSocketConnection->hostname, pIceServer->url, hostnameLen);
-            // TLS handshake is deferred to the gathering loop after TCP connect completes
-            pCandidate->stateTimeoutTime = GETTIME() + KVS_ICE_STUNS_TCP_CONNECT_TIMEOUT;
-        }
     }
 
 CleanUp:

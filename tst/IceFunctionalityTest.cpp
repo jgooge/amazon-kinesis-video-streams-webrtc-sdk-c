@@ -286,7 +286,7 @@ TEST_F(IceFunctionalityTest, IceAgentIceAgentAddIceServerUnitTest)
     EXPECT_TRUE(iceServer.isSecure);
     EXPECT_FALSE(iceServer.isTurn);
     EXPECT_EQ(iceServer.scheme, ICE_SERVER_SCHEME_STUNS);
-    EXPECT_EQ(iceServer.transport, KVS_SOCKET_PROTOCOL_TCP);
+    EXPECT_EQ(iceServer.transport, KVS_SOCKET_PROTOCOL_UDP);
     EXPECT_EQ(5349, (UINT16) getInt16(iceServer.ipAddresses.ipv4Address.port));
 
     EXPECT_NE(STATUS_SUCCESS, parseIceServer(&iceServer, NULL, NULL, NULL));

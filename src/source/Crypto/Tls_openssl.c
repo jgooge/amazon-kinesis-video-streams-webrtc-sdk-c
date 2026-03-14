@@ -66,7 +66,7 @@ INT32 tlsSessionCertificateVerifyCallback(INT32 preverify_ok, X509_STORE_CTX* ct
     return 1;
 }
 
-STATUS tlsSessionStartWithHostname(PTlsSession pTlsSession, BOOL isServer, PCHAR hostname)
+STATUS tlsSessionStart(PTlsSession pTlsSession, BOOL isServer)
 {
     ENTERS();
     STATUS retStatus = STATUS_SUCCESS;
@@ -75,7 +75,6 @@ STATUS tlsSessionStartWithHostname(PTlsSession pTlsSession, BOOL isServer, PCHAR
 
     CHK(pTlsSession != NULL, STATUS_NULL_ARG);
     CHK(pTlsSession->state == TLS_SESSION_STATE_NEW, retStatus);
-    UNUSED_PARAM(hostname);
 
     pTlsSession->pSslCtx = SSL_CTX_new(SSLv23_method());
     CHK(pTlsSession->pSslCtx != NULL, STATUS_SSL_CTX_CREATION_FAILED);
@@ -128,11 +127,6 @@ CleanUp:
 
     LEAVES();
     return retStatus;
-}
-
-STATUS tlsSessionStart(PTlsSession pTlsSession, BOOL isServer)
-{
-    return tlsSessionStartWithHostname(pTlsSession, isServer, NULL);
 }
 
 STATUS tlsSessionProcessPacket(PTlsSession pTlsSession, PBYTE pData, UINT32 bufferLen, PUINT32 pDataLen)

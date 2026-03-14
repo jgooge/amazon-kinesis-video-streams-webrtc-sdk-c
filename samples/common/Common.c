@@ -403,9 +403,8 @@ STATUS initializePeerConnection(PSampleConfiguration pSampleConfiguration, PRtcP
         }
     }
 
-    SNPRINTF(configuration.iceServers[0].urls, MAX_ICE_CONFIG_URI_LEN,
-             isEnvVarEnabled(USE_STUNS_ENV_VAR) ? KINESIS_VIDEO_STUNS_URL : KINESIS_VIDEO_STUN_URL,
-             pSampleConfiguration->channelInfo.pRegion, pKinesisVideoStunUrlPostFix);
+    SNPRINTF(configuration.iceServers[0].urls, MAX_ICE_CONFIG_URI_LEN, KINESIS_VIDEO_STUN_URL, pSampleConfiguration->channelInfo.pRegion,
+             pKinesisVideoStunUrlPostFix);
 
     if (pSampleConfiguration->useTurn) {
         // Set the URIs from the configuration

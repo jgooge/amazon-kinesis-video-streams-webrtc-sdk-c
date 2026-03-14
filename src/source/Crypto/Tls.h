@@ -75,7 +75,6 @@ STATUS freeTlsSession(PTlsSession*);
  * @return STATUS - status of operation
  */
 STATUS tlsSessionStart(PTlsSession, BOOL);
-STATUS tlsSessionStartWithHostname(PTlsSession, BOOL, PCHAR);
 
 /**
  * Decrypt application data up to specified bytes. The decrypted data will be copied back to the original buffer.

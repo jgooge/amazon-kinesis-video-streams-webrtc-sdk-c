@@ -12,7 +12,6 @@ STATUS createSocketConnection(KVS_IP_FAMILY_TYPE familyType, KVS_SOCKET_PROTOCOL
     STATUS retStatus = STATUS_SUCCESS;
     PSocketConnection pSocketConnection = NULL;
     CHAR ipAddr[KVS_IP_ADDRESS_STRING_BUFFER_LEN];
-    CHAR peerIpAddr[KVS_IP_ADDRESS_STRING_BUFFER_LEN];
 
     CHK(ppSocketConnection != NULL, STATUS_NULL_ARG);
     CHK(protocol == KVS_SOCKET_PROTOCOL_UDP || pPeerIpAddr != NULL, STATUS_INVALID_ARG);
@@ -55,16 +54,8 @@ CleanUp:
         DLOGD("create socket id %d, without the bind address(%d:%d)", pSocketConnection->localSocket, familyType, protocol);
     }
     if (protocol == KVS_SOCKET_PROTOCOL_TCP) {
-        getIpAddrStr(pPeerIpAddr, peerIpAddr, ARRAY_SIZE(peerIpAddr));
-        if (STATUS_SUCCEEDED(retStatus)) {
-            DLOGD("tcp socket connect initiated: socket=%d local=%s:%u remote=%s:%u remoteFamily=%d", pSocketConnection->localSocket,
-                  pBindAddr != NULL ? ipAddr : "0.0.0.0", pBindAddr != NULL ? (UINT16) getInt16(pBindAddr->port) : 0, peerIpAddr,
-                  (UINT16) getInt16(pPeerIpAddr->port), pPeerIpAddr->family);
-        } else {
-            DLOGW("tcp socket connect setup failed: socket=%d local=%s:%u remote=%s:%u remoteFamily=%d status=0x%08x", pSocketConnection->localSocket,
-                  pBindAddr != NULL ? ipAddr : "0.0.0.0", pBindAddr != NULL ? (UINT16) getInt16(pBindAddr->port) : 0, peerIpAddr,
-                  (UINT16) getInt16(pPeerIpAddr->port), pPeerIpAddr->family, retStatus);
-        }
+        getIpAddrStr(pPeerIpAddr, ipAddr, ARRAY_SIZE(ipAddr));
+        DLOGD("tcp socket connected with ip: %s:%u. family:%d", ipAddr, (UINT16) getInt16(pPeerIpAddr->port), pPeerIpAddr->family);
     }
 
     if (STATUS_FAILED(retStatus) && pSocketConnection != NULL) {
@@ -200,7 +191,7 @@ STATUS socketConnectionInitSecureConnection(PSocketConnection pSocketConnection,
 
     CHK_STATUS(createTlsSession(&callbacks, &pSocketConnection->pTlsSession));
 
-    CHK_STATUS(tlsSessionStartWithHostname(pSocketConnection->pTlsSession, isServer, pSocketConnection->hostname));
+    CHK_STATUS(tlsSessionStart(pSocketConnection->pTlsSession, isServer));
     pSocketConnection->secureConnection = TRUE;
 
 CleanUp:
@@ -314,49 +305,54 @@ BOOL socketConnectionIsClosed(PSocketConnection pSocketConnection)
     }
 }
 
-SOCKET_CONNECTION_STATE socketConnectionGetState(PSocketConnection pSocketConnection)
+BOOL socketConnectionIsConnected(PSocketConnection pSocketConnection)
 {
-    INT32 retVal = 0, socketErr = 0;
-    socklen_t socketErrLen = SIZEOF(socketErr);
+    INT32 retVal;
+    struct sockaddr* peerSockAddr = NULL;
+    socklen_t addrLen;
+    struct sockaddr_in ipv4PeerAddr;
+    struct sockaddr_in6 ipv6PeerAddr;
     CHAR hostIpAddr[KVS_IP_ADDRESS_STRING_BUFFER_LEN];
     CHAR peerIpAddr[KVS_IP_ADDRESS_STRING_BUFFER_LEN];
-    struct pollfd wfds;
 
     CHECK(pSocketConnection != NULL);
 
     if (pSocketConnection->protocol == KVS_SOCKET_PROTOCOL_UDP) {
-        return SOCKET_CONNECTION_STATE_CONNECTED;
+        return TRUE;
     }
+
+    if (pSocketConnection->peerIpAddr.family == KVS_IP_FAMILY_TYPE_IPV4) {
+        addrLen = SIZEOF(struct sockaddr_in);
+        MEMSET(&ipv4PeerAddr, 0x00, SIZEOF(ipv4PeerAddr));
+        ipv4PeerAddr.sin_family = AF_INET;
+        ipv4PeerAddr.sin_port = pSocketConnection->peerIpAddr.port;
+        MEMCPY(&ipv4PeerAddr.sin_addr, pSocketConnection->peerIpAddr.address, IPV4_ADDRESS_LENGTH);
+        peerSockAddr = (struct sockaddr*) &ipv4PeerAddr;
+    } else {
+        addrLen = SIZEOF(struct sockaddr_in6);
+        MEMSET(&ipv6PeerAddr, 0x00, SIZEOF(ipv6PeerAddr));
+        ipv6PeerAddr.sin6_family = AF_INET6;
+        ipv6PeerAddr.sin6_port = pSocketConnection->peerIpAddr.port;
+        MEMCPY(&ipv6PeerAddr.sin6_addr, pSocketConnection->peerIpAddr.address, IPV6_ADDRESS_LENGTH);
+        peerSockAddr = (struct sockaddr*) &ipv6PeerAddr;
+    }
+
+    MUTEX_LOCK(pSocketConnection->lock);
+    retVal = connect(pSocketConnection->localSocket, peerSockAddr, addrLen);
+    MUTEX_UNLOCK(pSocketConnection->lock);
 
     getIpAddrStr(&pSocketConnection->hostIpAddr, hostIpAddr, ARRAY_SIZE(hostIpAddr));
     getIpAddrStr(&pSocketConnection->peerIpAddr, peerIpAddr, ARRAY_SIZE(peerIpAddr));
-    MEMSET(&wfds, 0x00, SIZEOF(wfds));
-    wfds.fd = pSocketConnection->localSocket;
-    wfds.events = POLLOUT;
-    retVal = POLL(&wfds, 1, 0);
+    DLOGD("connect ip: %s:%u. family:%d with ip: %s:%u. family:%d", hostIpAddr, (UINT16) getInt16(pSocketConnection->hostIpAddr.port),
+          pSocketConnection->hostIpAddr.family, peerIpAddr, (UINT16) getInt16(pSocketConnection->peerIpAddr.port),
+          pSocketConnection->peerIpAddr.family);
 
-    if (retVal > 0 && getsockopt(pSocketConnection->localSocket, SOL_SOCKET, SO_ERROR, &socketErr, &socketErrLen) == 0 && socketErr == 0) {
-        DLOGD("tcp socket connected: %s:%u -> %s:%u", hostIpAddr, (UINT16) getInt16(pSocketConnection->hostIpAddr.port), peerIpAddr,
-              (UINT16) getInt16(pSocketConnection->peerIpAddr.port));
-        return SOCKET_CONNECTION_STATE_CONNECTED;
+    if (retVal == 0 || getErrorCode() == EISCONN) {
+        return TRUE;
     }
 
-    if (retVal < 0) {
-        DLOGW("socket connection poll failed with errno %s(%d)", getErrorString(getErrorCode()), getErrorCode());
-        return SOCKET_CONNECTION_STATE_FAILED;
-    } else if (socketErr != 0) {
-        DLOGW("socket connection check failed for %s:%u -> %s:%u with errno %s(%d)", hostIpAddr,
-              (UINT16) getInt16(pSocketConnection->hostIpAddr.port), peerIpAddr, (UINT16) getInt16(pSocketConnection->peerIpAddr.port),
-              getErrorString(socketErr), socketErr);
-        return SOCKET_CONNECTION_STATE_FAILED;
-    }
-
-    return SOCKET_CONNECTION_STATE_IN_PROGRESS;
-}
-
-BOOL socketConnectionIsConnected(PSocketConnection pSocketConnection)
-{
-    return socketConnectionGetState(pSocketConnection) == SOCKET_CONNECTION_STATE_CONNECTED;
+    DLOGW("socket connection check failed with errno %s(%d)", getErrorString(getErrorCode()), getErrorCode());
+    return FALSE;
 }
 
 STATUS socketSendDataWithRetry(PSocketConnection pSocketConnection, PBYTE buf, UINT32 bufLen, PKvsIpAddress pDestIp, PUINT32 pBytesWritten)
