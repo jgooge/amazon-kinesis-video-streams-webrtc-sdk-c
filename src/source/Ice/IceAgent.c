@@ -21,6 +21,11 @@ typedef enum {
 extern StateMachineState ICE_AGENT_STATE_MACHINE_STATES[];
 extern UINT32 ICE_AGENT_STATE_MACHINE_STATE_COUNT;
 
+static BOOL iceAgentForceSrflxOnlyMode()
+{
+    return isEnvVarEnabled(FORCE_SRFLX_ONLY_ENV_VAR);
+}
+
 STATUS createIceAgent(PCHAR username, PCHAR password, PIceAgentCallbacks pIceAgentCallbacks, PRtcConfiguration pRtcConfiguration,
                       TIMER_QUEUE_HANDLE timerQueueHandle, PConnectionListener pConnectionListener, PIceAgent* ppIceAgent)
 {
@@ -351,6 +356,12 @@ STATUS iceAgentReportNewLocalCandidate(PIceAgent pIceAgent, PIceCandidate pIceCa
     CHK(pIceAgent != NULL && pIceCandidate != NULL, STATUS_NULL_ARG);
     iceAgentLogNewCandidate(pIceCandidate);
 
+    if (iceAgentForceSrflxOnlyMode() && pIceCandidate->iceCandidateType != ICE_CANDIDATE_TYPE_SERVER_REFLEXIVE) {
+        DLOGD("Skipping local candidate report in srflx-only mode. Candidate id: %s. Type: %s", pIceCandidate->id,
+              iceAgentGetCandidateTypeStr(pIceCandidate->iceCandidateType));
+        goto CleanUp;
+    }
+
     CHK_WARN(pIceAgent->iceAgentCallbacks.newLocalCandidateFn != NULL, retStatus, "newLocalCandidateFn callback not implemented");
     CHK_WARN(!ATOMIC_LOAD_BOOL(&pIceAgent->candidateGatheringFinished), retStatus,
              "Cannot report new ice candidate because candidate gathering is already finished");
@@ -661,8 +672,13 @@ STATUS iceAgentStartGathering(PIceAgent pIceAgent)
                                 "Srflx candidates setup time");
     }
 
-    PROFILE_CALL_WITH_T_OBJ(CHK_STATUS(iceAgentInitRelayCandidates(pIceAgent)), pIceAgent->iceAgentProfileDiagnostics.relayCandidateSetUpTime,
-                            "Relay candidates setup time");
+    if (iceAgentForceSrflxOnlyMode()) {
+        DLOGW("KVS_WEBRTC_FORCE_SRFLX_ONLY is enabled. Skipping relay candidate gathering.");
+        ATOMIC_STORE_BOOL(&pIceAgent->addedRelayCandidate, TRUE);
+    } else {
+        PROFILE_CALL_WITH_T_OBJ(CHK_STATUS(iceAgentInitRelayCandidates(pIceAgent)), pIceAgent->iceAgentProfileDiagnostics.relayCandidateSetUpTime,
+                                "Relay candidates setup time");
+    }
 
     // start listening for incoming data
     CHK_STATUS(connectionListenerStart(pIceAgent->pConnectionListener));
@@ -1130,6 +1146,12 @@ STATUS createIceCandidatePairs(PIceAgent pIceAgent, PIceCandidate pIceCandidate,
         // https://tools.ietf.org/html/rfc8445#section-6.1.2.2
         // pair local and remote candidates with the same family
         if (pCurrentIceCandidate->state == ICE_CANDIDATE_STATE_VALID && pCurrentIceCandidate->ipAddress.family == pIceCandidate->ipAddress.family) {
+            if (iceAgentForceSrflxOnlyMode() &&
+                (pCurrentIceCandidate->iceCandidateType != ICE_CANDIDATE_TYPE_SERVER_REFLEXIVE ||
+                 pIceCandidate->iceCandidateType != ICE_CANDIDATE_TYPE_SERVER_REFLEXIVE)) {
+                continue;
+            }
+
             pIceCandidatePair = (PIceCandidatePair) MEMCALLOC(1, SIZEOF(IceCandidatePair));
             CHK(pIceCandidatePair != NULL, STATUS_NOT_ENOUGH_MEMORY);
 
@@ -1258,6 +1280,7 @@ STATUS findIceCandidatePairWithLocalSocketConnectionAndRemoteAddr(PIceAgent pIce
     UINT32 addrLen;
     PIceCandidatePair pTargetIceCandidatePair = NULL, pIceCandidatePair = NULL;
     PDoubleListNode pCurNode = NULL;
+    PIceCandidatePair pSocketMatchPair = NULL, pAddressMatchPair = NULL;
 
     CHK(pIceAgent != NULL && ppIceCandidatePair != NULL && pSocketConnection != NULL, STATUS_NULL_ARG);
 
@@ -1273,6 +1296,39 @@ STATUS findIceCandidatePairWithLocalSocketConnectionAndRemoteAddr(PIceAgent pIce
             MEMCMP(pIceCandidatePair->remote->ipAddress.address, pRemoteAddr->address, addrLen) == 0 &&
             (!checkPort || pIceCandidatePair->remote->ipAddress.port == pRemoteAddr->port)) {
             pTargetIceCandidatePair = pIceCandidatePair;
+        } else if (pIceCandidatePair->state != ICE_CANDIDATE_PAIR_STATE_FAILED && pIceCandidatePair->local->pSocketConnection == pSocketConnection) {
+            if (pSocketMatchPair == NULL) {
+                pSocketMatchPair = pIceCandidatePair;
+            }
+
+            if (pIceCandidatePair->remote->ipAddress.family == pRemoteAddr->family &&
+                MEMCMP(pIceCandidatePair->remote->ipAddress.address, pRemoteAddr->address, addrLen) == 0 && pAddressMatchPair == NULL) {
+                pAddressMatchPair = pIceCandidatePair;
+            }
+        }
+    }
+
+    if (pTargetIceCandidatePair == NULL && checkPort) {
+        CHAR remoteAddrStr[KVS_IP_ADDRESS_STRING_BUFFER_LEN];
+        CHAR matchedRemoteAddrStr[KVS_IP_ADDRESS_STRING_BUFFER_LEN];
+        CHAR localAddrStr[KVS_IP_ADDRESS_STRING_BUFFER_LEN];
+
+        CHK_STATUS(getIpAddrStr(pRemoteAddr, remoteAddrStr, ARRAY_SIZE(remoteAddrStr)));
+        CHK_STATUS(getIpAddrStr(&pSocketConnection->hostIpAddr, localAddrStr, ARRAY_SIZE(localAddrStr)));
+
+        if (pAddressMatchPair != NULL) {
+            CHK_STATUS(getIpAddrStr(&pAddressMatchPair->remote->ipAddress, matchedRemoteAddrStr, ARRAY_SIZE(matchedRemoteAddrStr)));
+            DLOGW("Candidate pair lookup near miss: local socket %d matched local candidate %s and remote IP %s, but expected remote port %u and found %u on pair %s_%s",
+                  pSocketConnection->localSocket, localAddrStr, remoteAddrStr, (UINT16) getInt16(pRemoteAddr->port),
+                  (UINT16) getInt16(pAddressMatchPair->remote->ipAddress.port), pAddressMatchPair->local->id, pAddressMatchPair->remote->id);
+        } else if (pSocketMatchPair != NULL) {
+            CHK_STATUS(getIpAddrStr(&pSocketMatchPair->remote->ipAddress, matchedRemoteAddrStr, ARRAY_SIZE(matchedRemoteAddrStr)));
+            DLOGW("Candidate pair lookup near miss: local socket %d matched local candidate %s, but no remote candidate matched %s:%u. Example existing remote on this socket is %s:%u from pair %s_%s",
+                  pSocketConnection->localSocket, localAddrStr, remoteAddrStr, (UINT16) getInt16(pRemoteAddr->port), matchedRemoteAddrStr,
+                  (UINT16) getInt16(pSocketMatchPair->remote->ipAddress.port), pSocketMatchPair->local->id, pSocketMatchPair->remote->id);
+        } else {
+            DLOGW("Candidate pair lookup miss: no pair found for local socket %d (%s) and remote %s:%u",
+                  pSocketConnection->localSocket, localAddrStr, remoteAddrStr, (UINT16) getInt16(pRemoteAddr->port));
         }
     }
 
@@ -2749,9 +2805,26 @@ STATUS handleStunPacket(PIceAgent pIceAgent, PBYTE pBuffer, UINT32 bufferLen, PS
                 // Update the server reflexive address which later will be picked up by the timer callback
                 CHK_STATUS(updateCandidateAddress(pIceCandidate, &pStunAttributeAddress->address));
 
+                if (pIceAgent->iceServers[pIceCandidate->iceServerIndex].scheme == ICE_SERVER_SCHEME_STUNS) {
+                    DLOGI("Shutting down STUNS DTLS session for srflx candidate %s after successful gather", pIceCandidate->id);
+                    CHK_STATUS(socketConnectionShutdownSecureSession(pIceCandidate->pSocketConnection));
+                }
+
                 // Remove from the transaction id store as we no longer are awaiting for the bind response
                 transactionIdStoreRemove(pIceAgent->pStunBindingRequestTransactionIdStore, pBuffer + STUN_PACKET_TRANSACTION_ID_OFFSET);
                 CHK(FALSE, retStatus);
+            }
+
+            CHK_STATUS(findCandidateWithSocketConnection(pSocketConnection, pIceAgent->localCandidates, &pIceCandidate));
+            if (pIceCandidate != NULL && pIceCandidate->iceCandidateType == ICE_CANDIDATE_TYPE_SERVER_REFLEXIVE) {
+                PKvsIpAddress pIceServerAddress = IS_IPV4_ADDR(pSrcAddr) ? &pIceAgent->iceServers[pIceCandidate->iceServerIndex].ipAddresses.ipv4Address
+                                                                         : &pIceAgent->iceServers[pIceCandidate->iceServerIndex].ipAddresses.ipv6Address;
+
+                if (pIceServerAddress->family != KVS_IP_FAMILY_TYPE_NOT_SET && isSameIpAddress(pSrcAddr, pIceServerAddress, TRUE)) {
+                    DLOGW("Ignoring late STUN binding success response from ICE server %s on srflx candidate %s",
+                          pIceAgent->iceServers[pIceCandidate->iceServerIndex].url, pIceCandidate->id);
+                    CHK(FALSE, retStatus);
+                }
             }
 
             CHK_STATUS(findIceCandidatePairWithLocalSocketConnectionAndRemoteAddr(pIceAgent, pSocketConnection, pSrcAddr, TRUE, &pIceCandidatePair));

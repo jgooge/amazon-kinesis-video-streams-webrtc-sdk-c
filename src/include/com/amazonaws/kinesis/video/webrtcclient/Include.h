@@ -702,12 +702,14 @@ extern "C" {
  * Env to control whether to use dual stack endpoints, unset means false
  */
 #define USE_DUAL_STACK_ENDPOINTS_ENV_VAR ((PCHAR) "KVS_DUALSTACK_ENDPOINTS")
+#define USE_STUNS_ENV_VAR ((PCHAR) "KVS_USE_STUNS")
 
 /**
  * Envs to disable IPv4 or IPv6 TURN relay candidates
  */
 #define DISABLE_IPV4_TURN_ENV_VAR ((PCHAR) "KVS_DISABLE_IPV4_TURN")
 #define DISABLE_IPV6_TURN_ENV_VAR ((PCHAR) "KVS_DISABLE_IPV6_TURN")
+#define FORCE_SRFLX_ONLY_ENV_VAR ((PCHAR) "KVS_WEBRTC_FORCE_SRFLX_ONLY")
 
 #ifdef _WIN32
 /**
@@ -761,6 +763,7 @@ extern "C" {
 #define KINESIS_VIDEO_STUN_URL_PREFIX               "stun."
 #define KINESIS_VIDEO_STUN_URL_PREFIX_LENGTH        5
 #define KINESIS_VIDEO_STUN_URL                      "stun:stun.kinesisvideo.%s.%s:443"
+#define KINESIS_VIDEO_STUNS_URL                     "stuns:stun.kinesisvideo-fips.%s.%s:443"
 #define KINESIS_VIDEO_STUN_URL_WITHOUT_PORT         "stun.kinesisvideo.%s.%s"
 #define KINESIS_VIDEO_DUALSTACK_STUN_URL_POSTFIX    "api.aws"
 #define KINESIS_VIDEO_DUALSTACK_STUN_URL_POSTFIX_CN "api.amazonwebservices.com.cn"
