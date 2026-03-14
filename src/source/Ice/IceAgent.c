@@ -2821,6 +2821,18 @@ STATUS handleStunPacket(PIceAgent pIceAgent, PBYTE pBuffer, UINT32 bufferLen, PS
                 CHK(FALSE, retStatus);
             }
 
+            CHK_STATUS(findCandidateWithSocketConnection(pSocketConnection, pIceAgent->localCandidates, &pIceCandidate));
+            if (pIceCandidate != NULL && pIceCandidate->iceCandidateType == ICE_CANDIDATE_TYPE_SERVER_REFLEXIVE) {
+                PKvsIpAddress pIceServerAddress = IS_IPV4_ADDR(pSrcAddr) ? &pIceAgent->iceServers[pIceCandidate->iceServerIndex].ipAddresses.ipv4Address
+                                                                         : &pIceAgent->iceServers[pIceCandidate->iceServerIndex].ipAddresses.ipv6Address;
+
+                if (pIceServerAddress->family != KVS_IP_FAMILY_TYPE_NOT_SET && isSameIpAddress(pSrcAddr, pIceServerAddress, TRUE)) {
+                    DLOGW("Ignoring late STUN binding success response from ICE server %s on srflx candidate %s",
+                          pIceAgent->iceServers[pIceCandidate->iceServerIndex].url, pIceCandidate->id);
+                    CHK(FALSE, retStatus);
+                }
+            }
+
             CHK_STATUS(findIceCandidatePairWithLocalSocketConnectionAndRemoteAddr(pIceAgent, pSocketConnection, pSrcAddr, TRUE, &pIceCandidatePair));
             if (pIceCandidatePair == NULL) {
                 CHK_STATUS(getIpAddrStr(pSrcAddr, ipAddrStr, ARRAY_SIZE(ipAddrStr)));
