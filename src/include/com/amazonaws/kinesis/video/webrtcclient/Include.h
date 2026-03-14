@@ -763,7 +763,7 @@ extern "C" {
 #define KINESIS_VIDEO_STUN_URL_PREFIX               "stun."
 #define KINESIS_VIDEO_STUN_URL_PREFIX_LENGTH        5
 #define KINESIS_VIDEO_STUN_URL                      "stun:stun.kinesisvideo.%s.%s:443"
-#define KINESIS_VIDEO_STUNS_URL                     "stuns:stun.kinesisvideo.%s.%s:443"
+#define KINESIS_VIDEO_STUNS_URL                     "stuns:stun.kinesisvideo-fips.%s.%s:443"
 #define KINESIS_VIDEO_STUN_URL_WITHOUT_PORT         "stun.kinesisvideo.%s.%s"
 #define KINESIS_VIDEO_DUALSTACK_STUN_URL_POSTFIX    "api.aws"
 #define KINESIS_VIDEO_DUALSTACK_STUN_URL_POSTFIX_CN "api.amazonwebservices.com.cn"
