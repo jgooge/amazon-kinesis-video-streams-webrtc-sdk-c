@@ -148,6 +148,7 @@ BOOL socketConnectionIsConnected(PSocketConnection);
 // internal functions
 STATUS socketSendDataWithRetry(PSocketConnection, PBYTE, UINT32, PKvsIpAddress, PUINT32);
 STATUS socketConnectionTlsSessionOutBoundPacket(UINT64, PBYTE, UINT32);
+VOID socketConnectionDtlsSessionOutBoundPacket(UINT64, PBYTE, UINT32);
 VOID socketConnectionTlsSessionOnStateChange(UINT64, TLS_SESSION_STATE);
 
 #ifdef __cplusplus

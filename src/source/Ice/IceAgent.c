@@ -21,6 +21,11 @@ typedef enum {
 extern StateMachineState ICE_AGENT_STATE_MACHINE_STATES[];
 extern UINT32 ICE_AGENT_STATE_MACHINE_STATE_COUNT;
 
+static BOOL iceAgentForceSrflxOnlyMode()
+{
+    return isEnvVarEnabled(FORCE_SRFLX_ONLY_ENV_VAR);
+}
+
 STATUS createIceAgent(PCHAR username, PCHAR password, PIceAgentCallbacks pIceAgentCallbacks, PRtcConfiguration pRtcConfiguration,
                       TIMER_QUEUE_HANDLE timerQueueHandle, PConnectionListener pConnectionListener, PIceAgent* ppIceAgent)
 {
@@ -351,6 +356,12 @@ STATUS iceAgentReportNewLocalCandidate(PIceAgent pIceAgent, PIceCandidate pIceCa
     CHK(pIceAgent != NULL && pIceCandidate != NULL, STATUS_NULL_ARG);
     iceAgentLogNewCandidate(pIceCandidate);
 
+    if (iceAgentForceSrflxOnlyMode() && pIceCandidate->iceCandidateType != ICE_CANDIDATE_TYPE_SERVER_REFLEXIVE) {
+        DLOGD("Skipping local candidate report in srflx-only mode. Candidate id: %s. Type: %s", pIceCandidate->id,
+              iceAgentGetCandidateTypeStr(pIceCandidate->iceCandidateType));
+        goto CleanUp;
+    }
+
     CHK_WARN(pIceAgent->iceAgentCallbacks.newLocalCandidateFn != NULL, retStatus, "newLocalCandidateFn callback not implemented");
     CHK_WARN(!ATOMIC_LOAD_BOOL(&pIceAgent->candidateGatheringFinished), retStatus,
              "Cannot report new ice candidate because candidate gathering is already finished");
@@ -661,8 +672,13 @@ STATUS iceAgentStartGathering(PIceAgent pIceAgent)
                                 "Srflx candidates setup time");
     }
 
-    PROFILE_CALL_WITH_T_OBJ(CHK_STATUS(iceAgentInitRelayCandidates(pIceAgent)), pIceAgent->iceAgentProfileDiagnostics.relayCandidateSetUpTime,
-                            "Relay candidates setup time");
+    if (iceAgentForceSrflxOnlyMode()) {
+        DLOGW("KVS_WEBRTC_FORCE_SRFLX_ONLY is enabled. Skipping relay candidate gathering.");
+        ATOMIC_STORE_BOOL(&pIceAgent->addedRelayCandidate, TRUE);
+    } else {
+        PROFILE_CALL_WITH_T_OBJ(CHK_STATUS(iceAgentInitRelayCandidates(pIceAgent)), pIceAgent->iceAgentProfileDiagnostics.relayCandidateSetUpTime,
+                                "Relay candidates setup time");
+    }
 
     // start listening for incoming data
     CHK_STATUS(connectionListenerStart(pIceAgent->pConnectionListener));
@@ -1130,6 +1146,12 @@ STATUS createIceCandidatePairs(PIceAgent pIceAgent, PIceCandidate pIceCandidate,
         // https://tools.ietf.org/html/rfc8445#section-6.1.2.2
         // pair local and remote candidates with the same family
         if (pCurrentIceCandidate->state == ICE_CANDIDATE_STATE_VALID && pCurrentIceCandidate->ipAddress.family == pIceCandidate->ipAddress.family) {
+            if (iceAgentForceSrflxOnlyMode() &&
+                (pCurrentIceCandidate->iceCandidateType != ICE_CANDIDATE_TYPE_SERVER_REFLEXIVE ||
+                 pIceCandidate->iceCandidateType != ICE_CANDIDATE_TYPE_SERVER_REFLEXIVE)) {
+                continue;
+            }
+
             pIceCandidatePair = (PIceCandidatePair) MEMCALLOC(1, SIZEOF(IceCandidatePair));
             CHK(pIceCandidatePair != NULL, STATUS_NOT_ENOUGH_MEMORY);
 
