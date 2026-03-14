@@ -1280,6 +1280,7 @@ STATUS findIceCandidatePairWithLocalSocketConnectionAndRemoteAddr(PIceAgent pIce
     UINT32 addrLen;
     PIceCandidatePair pTargetIceCandidatePair = NULL, pIceCandidatePair = NULL;
     PDoubleListNode pCurNode = NULL;
+    PIceCandidatePair pSocketMatchPair = NULL, pAddressMatchPair = NULL;
 
     CHK(pIceAgent != NULL && ppIceCandidatePair != NULL && pSocketConnection != NULL, STATUS_NULL_ARG);
 
@@ -1295,6 +1296,39 @@ STATUS findIceCandidatePairWithLocalSocketConnectionAndRemoteAddr(PIceAgent pIce
             MEMCMP(pIceCandidatePair->remote->ipAddress.address, pRemoteAddr->address, addrLen) == 0 &&
             (!checkPort || pIceCandidatePair->remote->ipAddress.port == pRemoteAddr->port)) {
             pTargetIceCandidatePair = pIceCandidatePair;
+        } else if (pIceCandidatePair->state != ICE_CANDIDATE_PAIR_STATE_FAILED && pIceCandidatePair->local->pSocketConnection == pSocketConnection) {
+            if (pSocketMatchPair == NULL) {
+                pSocketMatchPair = pIceCandidatePair;
+            }
+
+            if (pIceCandidatePair->remote->ipAddress.family == pRemoteAddr->family &&
+                MEMCMP(pIceCandidatePair->remote->ipAddress.address, pRemoteAddr->address, addrLen) == 0 && pAddressMatchPair == NULL) {
+                pAddressMatchPair = pIceCandidatePair;
+            }
+        }
+    }
+
+    if (pTargetIceCandidatePair == NULL && checkPort) {
+        CHAR remoteAddrStr[KVS_IP_ADDRESS_STRING_BUFFER_LEN];
+        CHAR matchedRemoteAddrStr[KVS_IP_ADDRESS_STRING_BUFFER_LEN];
+        CHAR localAddrStr[KVS_IP_ADDRESS_STRING_BUFFER_LEN];
+
+        CHK_STATUS(getIpAddrStr(pRemoteAddr, remoteAddrStr, ARRAY_SIZE(remoteAddrStr)));
+        CHK_STATUS(getIpAddrStr(&pSocketConnection->hostIpAddr, localAddrStr, ARRAY_SIZE(localAddrStr)));
+
+        if (pAddressMatchPair != NULL) {
+            CHK_STATUS(getIpAddrStr(&pAddressMatchPair->remote->ipAddress, matchedRemoteAddrStr, ARRAY_SIZE(matchedRemoteAddrStr)));
+            DLOGW("Candidate pair lookup near miss: local socket %d matched local candidate %s and remote IP %s, but expected remote port %u and found %u on pair %s_%s",
+                  pSocketConnection->localSocket, localAddrStr, remoteAddrStr, (UINT16) getInt16(pRemoteAddr->port),
+                  (UINT16) getInt16(pAddressMatchPair->remote->ipAddress.port), pAddressMatchPair->local->id, pAddressMatchPair->remote->id);
+        } else if (pSocketMatchPair != NULL) {
+            CHK_STATUS(getIpAddrStr(&pSocketMatchPair->remote->ipAddress, matchedRemoteAddrStr, ARRAY_SIZE(matchedRemoteAddrStr)));
+            DLOGW("Candidate pair lookup near miss: local socket %d matched local candidate %s, but no remote candidate matched %s:%u. Example existing remote on this socket is %s:%u from pair %s_%s",
+                  pSocketConnection->localSocket, localAddrStr, remoteAddrStr, (UINT16) getInt16(pRemoteAddr->port), matchedRemoteAddrStr,
+                  (UINT16) getInt16(pSocketMatchPair->remote->ipAddress.port), pSocketMatchPair->local->id, pSocketMatchPair->remote->id);
+        } else {
+            DLOGW("Candidate pair lookup miss: no pair found for local socket %d (%s) and remote %s:%u",
+                  pSocketConnection->localSocket, localAddrStr, remoteAddrStr, (UINT16) getInt16(pRemoteAddr->port));
         }
     }
 
