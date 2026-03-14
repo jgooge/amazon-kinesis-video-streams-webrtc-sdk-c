@@ -346,6 +346,37 @@ CleanUp:
     return retStatus;
 }
 
+STATUS socketConnectionShutdownSecureSession(PSocketConnection pSocketConnection)
+{
+    STATUS retStatus = STATUS_SUCCESS;
+    BOOL locked = FALSE;
+
+    CHK(pSocketConnection != NULL, STATUS_NULL_ARG);
+
+    MUTEX_LOCK(pSocketConnection->lock);
+    locked = TRUE;
+
+    if (pSocketConnection->pTlsSession != NULL) {
+        freeTlsSession(&pSocketConnection->pTlsSession);
+    }
+
+    if (pSocketConnection->pDtlsSession != NULL) {
+        freeDtlsSession(&pSocketConnection->pDtlsSession);
+    }
+
+    pSocketConnection->secureConnection = FALSE;
+    pSocketConnection->tlsHandshakeStartTime = INVALID_TIMESTAMP_VALUE;
+
+CleanUp:
+
+    if (locked) {
+        MUTEX_UNLOCK(pSocketConnection->lock);
+    }
+
+    CHK_LOG_ERR(retStatus);
+    return retStatus;
+}
+
 STATUS socketConnectionClosed(PSocketConnection pSocketConnection)
 {
     STATUS retStatus = STATUS_SUCCESS;

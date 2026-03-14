@@ -118,6 +118,11 @@ STATUS socketConnectionSendData(PSocketConnection, PBYTE, UINT32, PKvsIpAddress)
 STATUS socketConnectionReadData(PSocketConnection, PBYTE, UINT32, PUINT32);
 
 /**
+ * Tear down any active TLS/DTLS session while keeping the underlying socket open.
+ */
+STATUS socketConnectionShutdownSecureSession(PSocketConnection);
+
+/**
  * Mark PSocketConnection as closed
  *
  * @param - PSocketConnection - IN - the SocketConnection struct

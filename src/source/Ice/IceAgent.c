@@ -2816,6 +2816,11 @@ STATUS handleStunPacket(PIceAgent pIceAgent, PBYTE pBuffer, UINT32 bufferLen, PS
                           pIceAgent->iceServers[pIceCandidate->iceServerIndex].url);
                 }
 
+                if (pIceAgent->iceServers[pIceCandidate->iceServerIndex].scheme == ICE_SERVER_SCHEME_STUNS) {
+                    DLOGI("Shutting down STUNS DTLS session for srflx candidate %s after successful gather", pIceCandidate->id);
+                    CHK_STATUS(socketConnectionShutdownSecureSession(pIceCandidate->pSocketConnection));
+                }
+
                 // Remove from the transaction id store as we no longer are awaiting for the bind response
                 transactionIdStoreRemove(pIceAgent->pStunBindingRequestTransactionIdStore, pBuffer + STUN_PACKET_TRANSACTION_ID_OFFSET);
                 CHK(FALSE, retStatus);
