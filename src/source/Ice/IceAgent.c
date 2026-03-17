@@ -21,9 +21,9 @@ typedef enum {
 extern StateMachineState ICE_AGENT_STATE_MACHINE_STATES[];
 extern UINT32 ICE_AGENT_STATE_MACHINE_STATE_COUNT;
 
-static BOOL iceAgentForceSrflxOnlyMode()
+static BOOL iceAgentUseSrflxOnlyPolicy(PIceAgent pIceAgent)
 {
-    return isEnvVarEnabled(FORCE_SRFLX_ONLY_ENV_VAR);
+    return pIceAgent != NULL && pIceAgent->iceTransportPolicy == ICE_TRANSPORT_POLICY_SRFLX;
 }
 
 STATUS createIceAgent(PCHAR username, PCHAR password, PIceAgentCallbacks pIceAgentCallbacks, PRtcConfiguration pRtcConfiguration,
@@ -356,7 +356,7 @@ STATUS iceAgentReportNewLocalCandidate(PIceAgent pIceAgent, PIceCandidate pIceCa
     CHK(pIceAgent != NULL && pIceCandidate != NULL, STATUS_NULL_ARG);
     iceAgentLogNewCandidate(pIceCandidate);
 
-    if (iceAgentForceSrflxOnlyMode() && pIceCandidate->iceCandidateType != ICE_CANDIDATE_TYPE_SERVER_REFLEXIVE) {
+    if (iceAgentUseSrflxOnlyPolicy(pIceAgent) && pIceCandidate->iceCandidateType != ICE_CANDIDATE_TYPE_SERVER_REFLEXIVE) {
         DLOGD("Skipping local candidate report in srflx-only mode. Candidate id: %s. Type: %s", pIceCandidate->id,
               iceAgentGetCandidateTypeStr(pIceCandidate->iceCandidateType));
         goto CleanUp;
@@ -672,8 +672,8 @@ STATUS iceAgentStartGathering(PIceAgent pIceAgent)
                                 "Srflx candidates setup time");
     }
 
-    if (iceAgentForceSrflxOnlyMode()) {
-        DLOGW("KVS_WEBRTC_FORCE_SRFLX_ONLY is enabled. Skipping relay candidate gathering.");
+    if (iceAgentUseSrflxOnlyPolicy(pIceAgent)) {
+        DLOGI("ICE transport policy is srflx. Skipping relay candidate gathering.");
         ATOMIC_STORE_BOOL(&pIceAgent->addedRelayCandidate, TRUE);
     } else {
         PROFILE_CALL_WITH_T_OBJ(CHK_STATUS(iceAgentInitRelayCandidates(pIceAgent)), pIceAgent->iceAgentProfileDiagnostics.relayCandidateSetUpTime,
@@ -1146,7 +1146,7 @@ STATUS createIceCandidatePairs(PIceAgent pIceAgent, PIceCandidate pIceCandidate,
         // https://tools.ietf.org/html/rfc8445#section-6.1.2.2
         // pair local and remote candidates with the same family
         if (pCurrentIceCandidate->state == ICE_CANDIDATE_STATE_VALID && pCurrentIceCandidate->ipAddress.family == pIceCandidate->ipAddress.family) {
-            if (iceAgentForceSrflxOnlyMode() &&
+            if (iceAgentUseSrflxOnlyPolicy(pIceAgent) &&
                 (pCurrentIceCandidate->iceCandidateType != ICE_CANDIDATE_TYPE_SERVER_REFLEXIVE ||
                  pIceCandidate->iceCandidateType != ICE_CANDIDATE_TYPE_SERVER_REFLEXIVE)) {
                 continue;

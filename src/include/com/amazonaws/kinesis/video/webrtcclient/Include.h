@@ -709,7 +709,6 @@ extern "C" {
  */
 #define DISABLE_IPV4_TURN_ENV_VAR ((PCHAR) "KVS_DISABLE_IPV4_TURN")
 #define DISABLE_IPV6_TURN_ENV_VAR ((PCHAR) "KVS_DISABLE_IPV6_TURN")
-#define FORCE_SRFLX_ONLY_ENV_VAR ((PCHAR) "KVS_WEBRTC_FORCE_SRFLX_ONLY")
 
 #ifdef _WIN32
 /**
@@ -885,7 +884,10 @@ typedef enum {
     ICE_TRANSPORT_POLICY_RELAY = 1, //!< The ICE Agent uses only media relay candidates such as candidates
                                     //!< passing through a TURN server
 
-    ICE_TRANSPORT_POLICY_ALL = 2, //!< The ICE Agent can use any type of candidate when this value is specified.
+    ICE_TRANSPORT_POLICY_SRFLX = 2, //!< The ICE Agent gathers and uses only server reflexive candidates. Host candidates may still
+                                    //!< be gathered internally to derive server reflexive candidates.
+
+    ICE_TRANSPORT_POLICY_ALL = 3, //!< The ICE Agent can use any type of candidate when this value is specified.
 } ICE_TRANSPORT_POLICY;
 
 /**

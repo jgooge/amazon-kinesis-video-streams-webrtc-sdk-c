@@ -376,6 +376,9 @@ STATUS initializePeerConnection(PSampleConfiguration pSampleConfiguration, PRtcP
     if (!IS_NULL_OR_EMPTY_STRING(pIceTransportPolicy) && STRCMPI(pIceTransportPolicy, "relay") == 0) {
         configuration.iceTransportPolicy = ICE_TRANSPORT_POLICY_RELAY;
         DLOGI("ICE transport policy: relay");
+    } else if (!IS_NULL_OR_EMPTY_STRING(pIceTransportPolicy) && STRCMPI(pIceTransportPolicy, "srflx") == 0) {
+        configuration.iceTransportPolicy = ICE_TRANSPORT_POLICY_SRFLX;
+        DLOGI("ICE transport policy: srflx");
     } else {
         configuration.iceTransportPolicy = ICE_TRANSPORT_POLICY_ALL;
         DLOGI("ICE transport policy: all");

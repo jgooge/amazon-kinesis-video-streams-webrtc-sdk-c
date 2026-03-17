@@ -515,7 +515,15 @@ AWS access keys are ignored from environment variables if the sample was built i
 | `ENABLE_FILE_LOGGING`      | Save all logs to file               | Bool                 | `0`/`OFF`/`FALSE`     | `1`, `ON`, `TRUE` to enable. Case insensitive.    |
 | `AWS_KVS_CACERT_PATH`      | Root certificate path               | String               | `repo/certs/cert.pem` | Must end with `.pem` extension                    |
 | `CONTROL_PLANE_URI`        | Endpoint override                   | String               | Based on the region   | Example: "https://kinesisvideo.us-west-2.api.aws" |
-| `KVS_ICE_TRANSPORT_POLICY` | Types of ICE candidates to consider | Enum (`relay`/`all`) | `all`                 | Case insensitive                                  |
+| `KVS_USE_STUNS`            | Use the managed `stuns:` endpoint in samples | Bool          | `0`/`OFF`/`FALSE`     | `1`, `ON`, `TRUE` to enable. Case insensitive.    |
+| `KVS_ICE_TRANSPORT_POLICY` | Types of ICE candidates to consider | Enum (`relay`/`srflx`/`all`) | `all`                 | Case insensitive                                  |
+
+Example:
+
+```shell
+export KVS_USE_STUNS=ON
+export KVS_ICE_TRANSPORT_POLICY=srflx
+```
 
 ## TWCC support
 
