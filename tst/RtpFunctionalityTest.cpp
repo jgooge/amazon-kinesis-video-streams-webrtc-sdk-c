@@ -49,7 +49,7 @@ TEST_F(RtpFunctionalityTest, marshallUnmarshallGettingSameData)
     EXPECT_EQ(STATUS_SUCCESS,
               constructRtpPackets(&payloadArray, 8, 1, 1324857487, 0x1234ABCD, (PRtpPacket) packetList, payloadArray.payloadSubLenSize));
 
-    EXPECT_NE(NULL, (UINT64) packetList);
+    EXPECT_TRUE(packetList != NULL);
 
     for (i = 0; i < payloadArray.payloadSubLenSize; i++) {
         pRtpPacket = packetList + i;
@@ -414,6 +414,21 @@ TEST_F(RtpFunctionalityTest, packingUnpackingVerifySameOpusFrame)
     MEMFREE(depayload);
 }
 
+TEST_F(RtpFunctionalityTest, packingEmptyOpusFrameReturnsZeroSubLenSize)
+{
+    BYTE payload[] = {0x00};
+    PayloadArray payloadArray;
+
+    payloadArray.payloadLength = 0;
+    payloadArray.payloadSubLenSize = 0;
+
+    EXPECT_EQ(STATUS_SUCCESS,
+              createPayloadForOpus(DEFAULT_MTU_SIZE_BYTES, (PBYTE) &payload, 0, NULL, &payloadArray.payloadLength, NULL,
+                                   &payloadArray.payloadSubLenSize));
+    EXPECT_EQ(0, payloadArray.payloadLength);
+    EXPECT_EQ(0, payloadArray.payloadSubLenSize);
+}
+
 TEST_F(RtpFunctionalityTest, packingUnpackingVerifySameShortG711Frame)
 {
     BYTE payload[] = {0x00, 0x01, 0x02, 0x03, 0x04, 0x05};
@@ -629,6 +644,19 @@ TEST_F(RtpFunctionalityTest, twccPayload)
     EXPECT_EQ(1, (ptr[0] & 0xfu));
     EXPECT_EQ(420, seqNum);
     EXPECT_EQ(0, ptr[3]);
+}
+
+TEST_F(RtpFunctionalityTest, writeFrameNullArgs)
+{
+    Frame frame;
+    RtcRtpTransceiver transceiver;
+
+    MEMSET(&frame, 0x00, SIZEOF(Frame));
+    MEMSET(&transceiver, 0x00, SIZEOF(RtcRtpTransceiver));
+
+    EXPECT_EQ(STATUS_NULL_ARG, writeFrame(NULL, &frame));
+    EXPECT_EQ(STATUS_NULL_ARG, writeFrame(&transceiver, NULL));
+    EXPECT_EQ(STATUS_NULL_ARG, writeFrame(NULL, NULL));
 }
 
 } // namespace webrtcclient

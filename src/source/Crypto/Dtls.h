@@ -26,6 +26,14 @@ extern "C" {
 #define GENERATED_CERTIFICATE_NAME     "KVS-WebRTC-Client"
 #define KEYING_EXTRACTOR_LABEL         "EXTRACTOR-dtls_srtp"
 
+// All DTLS certificate fingerprints emitted and validated by this SDK use
+// SHA-256 (see `dtlsCertificateFingerprint` in both Dtls_mbedtls.c and
+// Dtls_openssl.c). The corresponding `a=fingerprint:` SDP attribute value is
+// therefore prefixed by "sha-256 " (RFC 8122 §5).
+#define DTLS_FINGERPRINT_SHA256_HASH_NAME  "sha-256"
+#define DTLS_FINGERPRINT_SHA256_PREFIX     DTLS_FINGERPRINT_SHA256_HASH_NAME " "
+#define DTLS_FINGERPRINT_SHA256_PREFIX_LEN (SIZEOF(DTLS_FINGERPRINT_SHA256_PREFIX) - 1)
+
 /*
  * DTLS transmission interval timer (in 100ns)
  */
@@ -64,6 +72,18 @@ typedef struct {
     UINT64 stateChangeFnCustomData;
     DtlsSessionOnStateChange stateChangeFn;
 } DtlsSessionCallbacks, *PDtlsSessionCallbacks;
+
+typedef enum {
+    DTLS_SESSION_VALIDATION_MODE_RELAXED,       /* Default peer DTLS flow. Identity is validated later via SDP fingerprint and is not
+                                                 * recommended for production server certificate validation. */
+    DTLS_SESSION_VALIDATION_MODE_STRICT_SERVER, /* Require the remote certificate chain and hostname to validate against
+                                                 * pExpectedServerHostname and the configured CA bundle. */
+} DTLS_SESSION_VALIDATION_MODE;
+
+typedef struct {
+    DTLS_SESSION_VALIDATION_MODE validationMode;
+    PCHAR pExpectedServerHostname;
+} DtlsSessionOptions, *PDtlsSessionOptions;
 
 // DtlsKeyingMaterial is information extracted via https://tools.ietf.org/html/rfc5705
 // also includes the use_srtp value from Handshake
@@ -118,6 +138,9 @@ struct __DtlsSession {
     RTC_DTLS_TRANSPORT_STATE state;
     DTLS_HANDSHAKE_STATE handshakeState;
     MUTEX sslLock;
+    volatile ATOMIC_BOOL remoteCertVerificationFailed;
+    DTLS_SESSION_VALIDATION_MODE validationMode;
+    PCHAR pExpectedServerHostname;
 
 #ifdef KVS_USE_OPENSSL
     volatile ATOMIC_BOOL sslInitFinished;
@@ -138,6 +161,7 @@ struct __DtlsSession {
     mbedtls_ctr_drbg_context ctrDrbg;
     mbedtls_ssl_config sslCtxConfig;
     mbedtls_ssl_context sslCtx;
+    mbedtls_x509_crt trustedCaCert;
     DtlsSessionCertificateInfo certificates[MAX_RTCCONFIGURATION_CERTIFICATES];
 #else
 #error "A Crypto implementation is required."
@@ -156,6 +180,7 @@ struct __DtlsSession {
  * @return STATUS - status of operation
  */
 STATUS createDtlsSession(PDtlsSessionCallbacks, TIMER_QUEUE_HANDLE, INT32, BOOL, PRtcCertificate, PDtlsSession*);
+STATUS createDtlsSessionWithOptions(PDtlsSessionCallbacks, TIMER_QUEUE_HANDLE, INT32, BOOL, PRtcCertificate, PDtlsSessionOptions, PDtlsSession*);
 
 /**
  * Free DTLS session. Not thread safe.
@@ -186,6 +211,11 @@ STATUS dtlsSessionHandshakeInThread(PDtlsSession, BOOL);
 /******** Internal Functions **********/
 STATUS dtlsValidateRtcCertificates(PRtcCertificate, PUINT32);
 STATUS dtlsSessionChangeState(PDtlsSession, RTC_DTLS_TRANSPORT_STATE);
+/**
+ * Copy DTLS validation options into the session, defaulting to relaxed validation when options are omitted.
+ * Strict server validation requires a non-empty expected hostname.
+ */
+STATUS dtlsSessionCopyOptions(PDtlsSession, PDtlsSessionOptions);
 
 STATUS dtlsFillPseudoRandomBits(PBYTE, UINT32);
 

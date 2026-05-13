@@ -147,7 +147,10 @@ You can pass the following options to `cmake ..`:
 * `-DENABLE_DATA_CHANNEL` -- Build SDK & samples with data channel. ON by default.
 * `-DBUILD_STATIC_LIBS` -- Build all KVS WebRTC and third-party libraries as static libraries. Default: OFF (shared build).
 * `-DADD_MUCLIBC`  -- Add -muclibc c flag
-* `-DBUILD_DEPENDENCIES` -- Whether or not to build depending libraries from source
+* `-DBUILD_DEPENDENCIES` -- Whether or not to build depending libraries from source. ON by default.
+* `-DBUILD_WEBSOCKETS` -- Build libwebsockets from source. Defaults to value of BUILD_DEPENDENCIES.
+* `-DBUILD_SRTP` -- Build libsrtp from source. Defaults to value of BUILD_DEPENDENCIES.
+* `-DBUILD_USRSCTP` -- Build libusrsctp from source. Defaults to value of BUILD_DEPENDENCIES.
 * `-DBUILD_OPENSSL_PLATFORM` -- If building OpenSSL what is the target platform
 * `-DBUILD_LIBSRTP_HOST_PLATFORM` -- If building LibSRTP what is the current platform
 * `-DBUILD_LIBSRTP_DESTINATION_PLATFORM` -- If building LibSRTP what is the destination platform
@@ -203,8 +206,34 @@ To use MBedTLS:
 cmake .. -DBUILD_DEPENDENCIES=OFF -DUSE_OPENSSL=OFF -DUSE_MBEDTLS=ON
 ```
 
-Note: Please follow the dependency requirements to confirm the version requirements are satisfied to use the SDK with system installed dependencies.
+> **Note:** Please follow the dependency requirements to confirm the version requirements are satisfied to use the SDK with system installed dependencies.
 If the versions are not satisfied, this option would not work and enabling the SDK to build dependencies for you would be the best option to go ahead with.
+
+
+> [!CAUTION]
+> System-installed libwebsockets and libsrtp packages (from apt, brew, etc.) are typically built against OpenSSL. If you are building the SDK with `-DUSE_MBEDTLS=ON` and relying on system packages, you might encounter linker or runtime erros. You must also build these dependencies from source (`-DBUILD_DEPENDENCIES=ON`) to ensure they are compiled against mbedTLS. This does not apply if you have manually built and installed mbedTLS-linked versions of these libraries.
+
+> [!TIP]
+> If you are unsure, recommendation is to enable SDK to build dependencies using `-DBUILD_DEPENDENCIES=ON`
+
+### Building selective dependencies from source
+
+If your system has some compatible dependencies but not others, you can selectively build individual libraries from source using the per-dependency flags. Each flag defaults to the value of `BUILD_DEPENDENCIES`.
+
+To just build libwebsockets from source and use system package for others
+```shell
+cmake .. -DBUILD_DEPENDENCIES=OFF -DBUILD_WEBSOCKETS=ON -DUSE_OPENSSL=ON
+```
+
+To build everything from source except libusrsctp (use system package):
+```shell
+cmake .. -DBUILD_DEPENDENCIES=ON -DBUILD_USRSCTP=OFF
+```
+
+Available per-dependency flags:
+* `-DBUILD_WEBSOCKETS=ON/OFF` -- Build libwebsockets from source (default: same as BUILD_DEPENDENCIES)
+* `-DBUILD_SRTP=ON/OFF` -- Build libsrtp from source (default: same as BUILD_DEPENDENCIES)
+* `-DBUILD_USRSCTP=ON/OFF` -- Build libusrsctp from source (default: same as BUILD_DEPENDENCIES)
 
 ## Run
 ### Setup your environment with your AWS account credentials and AWS region:
@@ -510,13 +539,16 @@ AWS access keys are ignored from environment variables if the sample was built i
 
 ### Other sample environment variables
 
-| Variable                   | Description                         | Type                 | Default               | Notes                                             |
-|----------------------------|-------------------------------------|----------------------|-----------------------|---------------------------------------------------|
-| `AWS_KVS_LOG_LEVEL`        | Log level                           | Int (1-8)            | WARN (4)              | See [Setup Logging](#setup-logging)               |
-| `ENABLE_FILE_LOGGING`      | Save all logs to file               | Bool                 | `0`/`OFF`/`FALSE`     | `1`, `ON`, `TRUE` to enable. Case insensitive.    |
-| `AWS_KVS_CACERT_PATH`      | Root certificate path               | String               | `repo/certs/cert.pem` | Must end with `.pem` extension                    |
-| `CONTROL_PLANE_URI`        | Endpoint override                   | String               | Based on the region   | Example: "https://kinesisvideo.us-west-2.api.aws" |
-| `KVS_ICE_TRANSPORT_POLICY` | Types of ICE candidates to consider | Enum (`relay`/`all`) | `all`                 | Case insensitive                                  |
+| Variable                          | Description                                                                   | Type                 | Default               | Notes                                                                                |
+|-----------------------------------|-------------------------------------------------------------------------------|----------------------|-----------------------|--------------------------------------------------------------------------------------|
+| `AWS_KVS_LOG_LEVEL`               | Log level                                                                     | Int (1-8)            | WARN (4)              | See [Setup Logging](#setup-logging)                                                  |
+| `ENABLE_FILE_LOGGING`             | Save all logs to file                                                         | Bool                 | `0`/`OFF`/`FALSE`     | `1`, `ON`, `TRUE` to enable. Case insensitive.                                       |
+| `AWS_KVS_CACERT_PATH`             | Root certificate path                                                         | String               | `repo/certs/cert.pem` | Must end with `.pem` extension                                                       |
+| `CONTROL_PLANE_URI`               | Endpoint override                                                             | String               | Based on the region   | Example: "https://kinesisvideo.us-west-2.api.aws"                                    |
+| `KVS_ICE_TRANSPORT_POLICY`        | Types of ICE candidates to consider                                           | Enum (`relay`/`all`) | `all`                 | Case insensitive                                                                     |
+| `KVS_PRE_GENERATE_CERT_ENABLED`   | Toggle to enable (TRUE) or disable (FALSE) cert pre-generation                | Bool                 | `TRUE`                | See [use pre-generated certs](#use-pre-generated-certificates) for more information. |
+| `KVS_PRE_GENERATE_CERT_PERIOD_MS` | Interval in milliseconds to check and generate certificates to fill the queue | Int (100-60000)      | `3000` (3 seconds)    | See [use pre-generated certs](#use-pre-generated-certificates) for more information. |
+| `KVS_PRE_GENERATE_CERT_MAX`       | Maximum certificates to keep in the queue (ready-to-go)                       | Int (0-10)           | 2                     | See [use pre-generated certs](#use-pre-generated-certificates) for more information. |
 
 For sample applications, GovCloud (`us-gov-*`), ADC (`us-iso-*`), and ADC-2 (`us-isob-*`) regions use the managed `stuns:` endpoint automatically. Commercial regions continue to use the managed `stun:` endpoint by default.
 
@@ -567,21 +599,23 @@ CHK_STATUS(peerConnectionOnSenderBandwidthEstimation(pSampleStreamingSession->pP
 ```
 
 ## Use Pre-generated Certificates
-The certificate generating function ([createCertificateAndKey](https://awslabs.github.io/amazon-kinesis-video-streams-webrtc-sdk-c/Dtls__openssl_8c.html#a451c48525b0c0a8919a880d6834c1f7f)) in createDtlsSession() can take between 5 - 15 seconds in low performance embedded devices, it is called for every peer connection creation when KVS WebRTC receives an offer. To avoid this extra start-up latency, certificate can be pre-generated and passed in when offer comes.
+The certificate generating function ([createCertificateAndKey](https://awslabs.github.io/amazon-kinesis-video-streams-webrtc-sdk-c/Dtls__openssl_8c.html#a451c48525b0c0a8919a880d6834c1f7f)) in createDtlsSession() can take between 5 - 15 seconds in low performance embedded devices, it is called for every peer connection creation when KVS WebRTC receives an offer. To avoid this extra start-up latency, certificate can be pre-generated and passed into the PeerConnectionConfiguration when offer comes.
 
 **Important Note: It is recommended to rotate the certificates often - preferably for every peer connection to avoid a compromised client weakening the security of the new connections.**
 
-Take `kvsWebRTCClientMaster` as sample, add `RtcCertificate certificates[CERT_COUNT];` to **SampleConfiguration** in [Samples.h](samples/common/Samples.h).
-Then pass in the pre-generated certificate in initializePeerConnection() in [Common.c](samples/common/Common.c).
+### How It Works
+
+The samples automatically pre-generate certificates in the background using a timer callback. When a peer connection is created, a certificate is dequeued from the pre-generated pool and used:
 
 ```c
-configuration.certificates[0].pCertificate = pSampleConfiguration->certificates[0].pCertificate;
-configuration.certificates[0].pPrivateKey = pSampleConfiguration->certificates[0].pPrivateKey;
+retStatus = stackQueueDequeue(pSampleConfiguration->pregeneratedCertificates, &data);
+if (retStatus == STATUS_SUCCESS) {
+    pRtcCertificate = (PRtcCertificate) data;
+    configuration.certificates[0] = *pRtcCertificate;
+}
 ```
 
-where, `configuration` is of type [`RtcConfiguration`](https://awslabs.github.io/amazon-kinesis-video-streams-webrtc-sdk-c/structRtcConfiguration.html) in the function that calls `initializePeerConnection()`.
-
-Doing this will make sure that [`createCertificateAndKey()`](https://awslabs.github.io/amazon-kinesis-video-streams-webrtc-sdk-c/Dtls__openssl_8c.html#a451c48525b0c0a8919a880d6834c1f7f) would not execute since a certificate is already available.
+See the [sample environment variables](#other-sample-environment-variables) section on how to configure the pre-generation behavior.
 
 ## Provide Hardware Entropy Source
 
